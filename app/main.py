@@ -1,7 +1,9 @@
 from fastapi import FastAPI
 
+from app.config import description, title, version
 
-app = FastAPI()
+
+app = FastAPI(title=title, description=description, version=version)
 
 
 @app.get("/")
