@@ -1,6 +1,6 @@
 # ShelfSense IT
 
-IT inventory management system built as a DevOps capstone project.
+A modern IT inventory management system built with FastAPI and DevOps best practices.
 
 ## Tech Stack
 
