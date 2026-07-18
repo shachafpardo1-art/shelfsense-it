@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 
 from app.config import description, title, version
+from app.routers.api import api_router
 from app.routers.health import router as health_router
 
 
@@ -13,3 +14,4 @@ def read_root() -> dict[str, str]:
 
 
 app.include_router(health_router)
+app.include_router(api_router)
