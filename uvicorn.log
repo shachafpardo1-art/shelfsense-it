@@ -1,0 +1,10 @@
+nohup: ignoring input
+INFO:     Will watch for changes in these directories: ['/home/shachaf/shelfsense-it']
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [213125] using WatchFiles
+INFO:     Started server process [213128]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:36598 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36614 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:36614 - "GET /favicon.ico HTTP/1.1" 404 Not Found
