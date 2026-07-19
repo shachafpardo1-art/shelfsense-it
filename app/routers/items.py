@@ -11,7 +11,7 @@ from app.services.item_service import (
     deactivate_item,
     get_active_item_by_id,
     item_exists_by_sku,
-    list_active_items,
+    list_filtered_active_items,
     update_active_item,
 )
 
@@ -35,8 +35,12 @@ def create_item_endpoint(item_in: ItemCreate, db: Session = Depends(get_db)) -> 
 
 
 @router.get("", response_model=list[ItemResponse])
-def list_items_endpoint(db: Session = Depends(get_db)) -> list[ItemResponse]:
-    return list_active_items(db)
+def list_items_endpoint(
+    search: str | None = None,
+    category: str | None = None,
+    db: Session = Depends(get_db),
+) -> list[ItemResponse]:
+    return list_filtered_active_items(db, search=search, category=category)
 
 
 @router.get("/{item_id}", response_model=ItemResponse)
