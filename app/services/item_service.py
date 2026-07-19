@@ -1,5 +1,6 @@
 import logging
 
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -8,6 +9,13 @@ from app.schemas.item import ItemCreate, ItemUpdate
 
 
 logger = logging.getLogger("app.items")
+
+
+def normalize_filter_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def create_item(db: Session, item_in: ItemCreate) -> Item:
@@ -35,7 +43,31 @@ def create_item(db: Session, item_in: ItemCreate) -> Item:
 
 
 def list_active_items(db: Session) -> list[Item]:
-    return db.query(Item).filter(Item.is_active.is_(True)).all()
+    return list_filtered_active_items(db)
+
+
+def list_filtered_active_items(
+    db: Session,
+    search: str | None = None,
+    category: str | None = None,
+) -> list[Item]:
+    query = db.query(Item).filter(Item.is_active.is_(True))
+
+    normalized_search = normalize_filter_value(search)
+    if normalized_search is not None:
+        search_pattern = f"%{normalized_search}%"
+        query = query.filter(
+            or_(
+                Item.name.ilike(search_pattern),
+                Item.sku.ilike(search_pattern),
+            )
+        )
+
+    normalized_category = normalize_filter_value(category)
+    if normalized_category is not None:
+        query = query.filter(func.lower(Item.category) == normalized_category.lower())
+
+    return query.order_by(Item.id.asc()).all()
 
 
 def get_active_item_by_id(db: Session, item_id: int) -> Item | None:
