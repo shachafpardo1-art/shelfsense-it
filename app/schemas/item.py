@@ -12,6 +12,14 @@ class ItemCreate(BaseModel):
     unit_price: Decimal
 
 
+class ItemUpdate(BaseModel):
+    name: str | None = None
+    category: str | None = None
+    sku: str | None = None
+    quantity: int | None = None
+    unit_price: Decimal | None = None
+
+
 class ItemResponse(BaseModel):
     id: int
     name: str
