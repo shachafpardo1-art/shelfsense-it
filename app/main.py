@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import cors_allow_origins, description, log_level, title, version
 from app.logging_config import configure_logging
+from app.middleware import request_logging_middleware
 from app.routers.api import api_router
 from app.routers.health import router as health_router
 
@@ -10,6 +11,7 @@ from app.routers.health import router as health_router
 configure_logging(log_level)
 
 app = FastAPI(title=title, description=description, version=version)
+app.middleware("http")(request_logging_middleware)
 
 if cors_allow_origins:
     app.add_middleware(
