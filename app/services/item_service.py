@@ -26,19 +26,19 @@ def create_item(db: Session, item_in: ItemCreate) -> Item:
     except IntegrityError:
         db.rollback()
         logger.error(
-            "Database IntegrityError operation=create_item sku=%s",
+            "😞 Item could not be created because the database reported a duplicate or integrity error operation=create_item sku=%s",
             item_in.sku,
         )
         raise
     except Exception:
         db.rollback()
         logger.exception(
-            "Unexpected database commit failure operation=create_item sku=%s",
+            "😞 Item could not be created because of an unexpected database failure operation=create_item sku=%s",
             item_in.sku,
         )
         raise
     db.refresh(item)
-    logger.info("Item created operation=create_item item_id=%s sku=%s", item.id, item.sku)
+    logger.info("😊 Item created successfully operation=create_item item_id=%s sku=%s", item.id, item.sku)
     return item
 
 
@@ -98,7 +98,7 @@ def update_active_item(db: Session, item_id: int, item_in: ItemUpdate) -> Item |
     except IntegrityError:
         db.rollback()
         logger.error(
-            "Database IntegrityError operation=update_item item_id=%s sku=%s",
+            "😞 Item could not be updated because the database reported a duplicate or integrity error operation=update_item item_id=%s sku=%s",
             item_id,
             item_in.sku if item_in.sku is not None else item.sku,
         )
@@ -106,13 +106,13 @@ def update_active_item(db: Session, item_id: int, item_in: ItemUpdate) -> Item |
     except Exception:
         db.rollback()
         logger.exception(
-            "Unexpected database commit failure operation=update_item item_id=%s sku=%s",
+            "😞 Item could not be updated because of an unexpected database failure operation=update_item item_id=%s sku=%s",
             item_id,
             item_in.sku if item_in.sku is not None else item.sku,
         )
         raise
     db.refresh(item)
-    logger.info("Item updated operation=update_item item_id=%s sku=%s", item.id, item.sku)
+    logger.info("😊 Item updated successfully operation=update_item item_id=%s sku=%s", item.id, item.sku)
     return item
 
 
@@ -127,7 +127,7 @@ def deactivate_item(db: Session, item_id: int) -> Item | None:
     except IntegrityError:
         db.rollback()
         logger.error(
-            "Database IntegrityError operation=delete_item item_id=%s sku=%s",
+            "😞 Item could not be deleted because the database reported a duplicate or integrity error operation=delete_item item_id=%s sku=%s",
             item_id,
             item.sku,
         )
@@ -135,11 +135,11 @@ def deactivate_item(db: Session, item_id: int) -> Item | None:
     except Exception:
         db.rollback()
         logger.exception(
-            "Unexpected database commit failure operation=delete_item item_id=%s sku=%s",
+            "😞 Item could not be deleted because of an unexpected database failure operation=delete_item item_id=%s sku=%s",
             item_id,
             item.sku,
         )
         raise
     db.refresh(item)
-    logger.info("Item soft deleted operation=delete_item item_id=%s sku=%s", item.id, item.sku)
+    logger.info("😊 Item deleted successfully operation=delete_item item_id=%s sku=%s", item.id, item.sku)
     return item

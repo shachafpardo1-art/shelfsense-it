@@ -58,7 +58,7 @@ def get_dashboard_summary(db: Session) -> DashboardSummaryResponse:
     )
 
     logger.info(
-        "Dashboard summary generated operation=get_dashboard_summary total_products=%s low_stock_count=%s out_of_stock_count=%s",
+        "😊 Dashboard summary generated successfully operation=get_dashboard_summary total_products=%s low_stock_count=%s out_of_stock_count=%s",
         summary.total_products,
         summary.low_stock_count,
         summary.out_of_stock_count,
