@@ -19,18 +19,27 @@ async def request_logging_middleware(request: Request, call_next) -> Response:
         response = await call_next(request)
         duration_ms = (time.perf_counter() - start_time) * 1000
         response.headers["X-Request-ID"] = request_id
-        logger.info(
-            "request_completed method=%s path=%s status_code=%s duration_ms=%.2f",
-            request.method,
-            request.url.path,
-            response.status_code,
-            duration_ms,
-        )
+        if response.status_code < 400:
+            logger.info(
+                "😊 Request completed successfully method=%s path=%s status_code=%s duration_ms=%.2f",
+                request.method,
+                request.url.path,
+                response.status_code,
+                duration_ms,
+            )
+        else:
+            logger.info(
+                "😞 Request completed with an error response method=%s path=%s status_code=%s duration_ms=%.2f",
+                request.method,
+                request.url.path,
+                response.status_code,
+                duration_ms,
+            )
         return response
     except Exception:
         duration_ms = (time.perf_counter() - start_time) * 1000
         logger.exception(
-            "request_failed method=%s path=%s duration_ms=%.2f",
+            "😞 Request failed because of an unexpected exception method=%s path=%s duration_ms=%.2f",
             request.method,
             request.url.path,
             duration_ms,
