@@ -7,6 +7,7 @@ import sys
 import time
 import unittest
 import urllib.request
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -22,6 +23,8 @@ from app.middleware.request_logging import (
     http_requests_total,
     request_logging_middleware,
 )
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class CaptureStream(io.StringIO):
@@ -95,7 +98,7 @@ class ObservabilityTests(unittest.TestCase):
         cls.base_url = f"http://127.0.0.1:{cls.port}"
         cls.server = subprocess.Popen(
             [
-                ".venv/bin/python",
+                sys.executable,
                 "-m",
                 "uvicorn",
                 "app.main:app",
@@ -106,7 +109,7 @@ class ObservabilityTests(unittest.TestCase):
                 "--log-level",
                 "warning",
             ],
-            cwd="/home/shachaf/shelfsense-it",
+            cwd=REPO_ROOT,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
