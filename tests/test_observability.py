@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -9,10 +10,11 @@ import unittest
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from fastapi import Response
+from fastapi import HTTPException, Response
 from prometheus_client import CONTENT_TYPE_LATEST
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
@@ -23,8 +25,10 @@ from app.middleware.request_logging import (
     http_requests_total,
     request_logging_middleware,
 )
+from app.routers.health import health_check, readiness_check
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+TEST_DATABASE_URL = "sqlite:///:memory:"
 
 
 class CaptureStream(io.StringIO):
@@ -110,6 +114,7 @@ class ObservabilityTests(unittest.TestCase):
                 "warning",
             ],
             cwd=REPO_ROOT,
+            env={**os.environ, "DATABASE_URL": TEST_DATABASE_URL},
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -142,12 +147,36 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual(json.loads(body), {"status": "healthy"})
         self.assertEqual(headers["content-type"], "application/json")
 
+    def test_health_check_remains_lightweight(self) -> None:
+        self.assertEqual(health_check(), {"status": "healthy"})
+
     def test_ready_endpoint_returns_expected_response(self) -> None:
         status_code, headers, body = http_get(self.base_url, "/ready")
 
         self.assertEqual(status_code, 200)
         self.assertEqual(json.loads(body), {"status": "ready"})
         self.assertEqual(headers["content-type"], "application/json")
+
+    def test_readiness_check_executes_select_1(self) -> None:
+        db = Mock()
+
+        response = readiness_check(db)
+
+        self.assertEqual(response, {"status": "ready"})
+        db.execute.assert_called_once()
+        statement = db.execute.call_args.args[0]
+        self.assertEqual(str(statement), "SELECT 1")
+
+    def test_readiness_check_returns_503_when_database_is_unavailable(self) -> None:
+        db = Mock()
+        db.execute.side_effect = SQLAlchemyError("db down")
+
+        with self.assertRaises(HTTPException) as context:
+            readiness_check(db)
+
+        self.assertEqual(context.exception.status_code, 503)
+        self.assertEqual(context.exception.detail, "Database unavailable")
+        self.assertIsInstance(context.exception.__cause__, SQLAlchemyError)
 
     def test_metrics_endpoint_returns_prometheus_content(self) -> None:
         status_code, headers, body = http_get(self.base_url, "/metrics")
