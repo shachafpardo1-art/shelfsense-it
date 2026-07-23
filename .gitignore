@@ -17,6 +17,7 @@ env/
 # Environment Variables
 # ==========================
 .env
+kubernetes/helm-chart/values.local.yaml
 
 # ==========================
 # IDE
