@@ -112,14 +112,31 @@ async def request_logging_middleware(request: Request, call_next) -> Response:
                 route=route_label,
             ).observe(duration_seconds)
 
-        log_method = logger.error if response.status_code >= 500 else logger.info
-        log_method("request_completed")
+        if response.status_code < 400:
+            logger.info(
+                "😊 Request completed successfully method=%s path=%s status_code=%s duration_ms=%.2f",
+                request.method,
+                request.url.path,
+                response.status_code,
+                duration_ms,
+            )
+        else:
+            log_method = logger.error if response.status_code >= 500 else logger.info
+            log_method(
+                "😞 Request completed with an error response method=%s path=%s status_code=%s duration_ms=%.2f",
+                request.method,
+                request.url.path,
+                response.status_code,
+                duration_ms,
+            )
+
         return response
     except Exception:
         duration_seconds = time.perf_counter() - start_time
         duration_ms = duration_seconds * 1000
         route_label = resolve_route_label(request)
         update_request_context(500, duration_ms, route_label)
+
         if track_metrics:
             http_requests_total.labels(
                 method=request.method,
@@ -135,7 +152,12 @@ async def request_logging_middleware(request: Request, call_next) -> Response:
                 route=route_label,
             ).inc()
 
-        logger.exception("request_failed")
+        logger.exception(
+            "😞 Request failed because of an unexpected exception method=%s path=%s duration_ms=%.2f",
+            request.method,
+            request.url.path,
+            duration_ms,
+        )
         raise
     finally:
         if track_metrics:
