@@ -21,7 +21,7 @@ postgres:
       cpu: 100m
       memory: 256Mi
     limits:
-      cpu: 500m
+      cpu: 300m
       memory: 512Mi
   readinessProbe:
     initialDelaySeconds: 10
@@ -33,3 +33,38 @@ postgres:
     periodSeconds: 15
     timeoutSeconds: 5
     failureThreshold: 6
+
+
+backend:
+  replicaCount: 2
+
+  image:
+    repository: shachafpardo/shelfsense-backend
+    tag: "0.1.0"
+    pullPolicy: IfNotPresent
+
+  service:
+    name: shelfsense-backend
+    port: 8000
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+  readinessProbe:
+    path: /ready
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+
+  livenessProbe:
+    path: /health
+    initialDelaySeconds: 15
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3

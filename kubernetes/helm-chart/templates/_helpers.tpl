@@ -28,3 +28,14 @@ app.kubernetes.io/component: postgres
 {{- define "shelfsense.postgres.secretName" -}}
 {{- printf "%s-postgres-secret" .Release.Name -}}
 {{- end -}}
+
+
+{{- define "shelfsense.backend.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "shelfsense.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: backend
+{{- end -}}
+
+{{- define "shelfsense.backend.secretName" -}}
+{{- printf "%s-backend-secret" .Release.Name -}}
+{{- end -}}
