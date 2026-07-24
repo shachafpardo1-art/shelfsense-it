@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.frontend.service.name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "shelfsense.labels" . | nindent 4 }}
+    app.kubernetes.io/component: frontend
+
+spec:
+  type: {{ .Values.frontend.service.type }}
+
+  ports:
+    - name: http
+      port: {{ .Values.frontend.service.port }}
+      targetPort: http
+      protocol: TCP
+
+  selector:
+    {{- include "shelfsense.frontend.selectorLabels" . | nindent 4 }}
