@@ -69,6 +69,18 @@ backend:
     timeoutSeconds: 5
     failureThreshold: 3
 
+migration:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
 frontend:
   replicaCount: 1
 
