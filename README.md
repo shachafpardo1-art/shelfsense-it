@@ -134,3 +134,14 @@ curl "http://127.0.0.1:8000/api/v1/items?search=rtx&category=gpu"
 
 - `/` dashboard summary view
 - `/inventory` inventory management view with filters and item CRUD actions
+
+### Database initialization
+
+When the stack starts, the `migrate` service waits for PostgreSQL to become healthy and then initializes the database in the following order:
+
+1. Runs `alembic upgrade head` to apply all database migrations.
+2. Runs `python scripts/seed_items.py` to insert the sample inventory data.
+
+The seed script is idempotent and identifies existing items by SKU, so repeated runs do not create duplicates. The backend starts only after database initialization completes successfully.
+
+The Helm deployment uses the same initialization flow through a pre-install and pre-upgrade migration Job.

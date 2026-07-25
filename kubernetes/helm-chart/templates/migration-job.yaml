@@ -31,9 +31,9 @@ spec:
           imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
 
           command:
-            - alembic
-            - upgrade
-            - head
+            - sh
+            - -c
+            - alembic upgrade head && python -m scripts.seed_items
 
           env:
             - name: DATABASE_URL
