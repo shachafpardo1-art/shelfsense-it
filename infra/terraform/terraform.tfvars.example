@@ -1,0 +1,4 @@
+project_name = "shelfsense-it"
+environment  = "dev"
+aws_region   = "eu-central-1"
+owner        = "devops-student"

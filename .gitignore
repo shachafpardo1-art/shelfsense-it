@@ -48,3 +48,11 @@ htmlcov/
 .DS_Store
 Thumbs.db
 tests/*.sqlite3
+
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
