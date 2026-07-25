@@ -39,3 +39,9 @@ app.kubernetes.io/component: backend
 {{- define "shelfsense.backend.secretName" -}}
 {{- printf "%s-backend-secret" .Release.Name -}}
 {{- end -}}
+
+{{- define "shelfsense.frontend.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "shelfsense.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: frontend
+{{- end -}}

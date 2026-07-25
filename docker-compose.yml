@@ -30,6 +30,10 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    networks:
+      default:
+        aliases:
+          - shelfsense-backend
 
   migrate:
     build:

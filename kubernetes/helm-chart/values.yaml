@@ -68,3 +68,51 @@ backend:
     periodSeconds: 15
     timeoutSeconds: 5
     failureThreshold: 3
+
+migration:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+frontend:
+  replicaCount: 1
+
+  image:
+    repository: shachafpardo/shelfsense-frontend
+    tag: "0.1.1"
+    pullPolicy: IfNotPresent
+
+  service:
+    name: shelfsense-frontend
+    type: NodePort
+    port: 80
+    nodePort: 30080
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+  readinessProbe:
+    path: /
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  livenessProbe:
+    path: /
+    initialDelaySeconds: 15
+    periodSeconds: 15
+    timeoutSeconds: 5
+    failureThreshold: 3
