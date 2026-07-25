@@ -44,3 +44,23 @@ variable "availability_zone" {
   type        = string
   default     = "eu-central-1a"
 }
+variable "ssh_allowed_cidr" {
+  description = "CIDR block allowed to connect to the EC2 instance over SSH."
+  type        = string
+
+  validation {
+    condition     = can(cidrhost(var.ssh_allowed_cidr, 0))
+    error_message = "ssh_allowed_cidr must be a valid CIDR block, for example 203.0.113.10/32."
+  }
+}
+
+variable "key_pair_name" {
+  description = "Name of an existing AWS EC2 key pair used for SSH access."
+  type        = string
+}
+
+variable "instance_type" {
+  description = "EC2 instance type used for the ShelfSense server."
+  type        = string
+  default     = "t3.micro"
+}

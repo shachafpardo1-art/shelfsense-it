@@ -17,3 +17,28 @@ output "public_route_table_id" {
   description = "ID of the public route table."
   value       = aws_route_table.public.id
 }
+
+output "security_group_id" {
+  description = "ID of the security group attached to the ShelfSense server."
+  value       = aws_security_group.shelfsense_server.id
+}
+
+output "ec2_instance_id" {
+  description = "ID of the ShelfSense EC2 instance."
+  value       = aws_instance.shelfsense_server.id
+}
+
+output "ec2_public_ip" {
+  description = "Public IPv4 address of the ShelfSense EC2 instance."
+  value       = aws_instance.shelfsense_server.public_ip
+}
+
+output "ec2_public_dns" {
+  description = "Public DNS name of the ShelfSense EC2 instance."
+  value       = aws_instance.shelfsense_server.public_dns
+}
+
+output "ssh_command" {
+  description = "Example SSH command for connecting to the ShelfSense server."
+  value       = "ssh -i <PRIVATE_KEY_PATH> ubuntu@${aws_instance.shelfsense_server.public_ip}"
+}
