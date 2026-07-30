@@ -56,3 +56,5 @@ tests/*.sqlite3
 *.tfvars
 !*.tfvars.example
 crash.log
+tfplan
+*.tfplan
