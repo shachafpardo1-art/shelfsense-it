@@ -1,0 +1,10 @@
+---
+- name: ShelfSense IT base site playbook
+  hosts: production
+  become: true
+  gather_facts: true
+
+  roles:
+    - common
+    - k3s
+    - helm
