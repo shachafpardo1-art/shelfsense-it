@@ -1,0 +1,2 @@
+[production]
+app-server-01 ansible_host=your-production-host.example.com ansible_port=22

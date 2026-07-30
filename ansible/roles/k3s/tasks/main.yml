@@ -1,0 +1,101 @@
+---
+- name: Check whether K3s is already installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/k3s
+  register: k3s_binary
+
+- name: Read installed K3s version
+  ansible.builtin.command:
+    cmd: /usr/local/bin/k3s --version
+  register: k3s_version_check
+  changed_when: false
+  when: k3s_binary.stat.exists
+
+- name: Record installed K3s version
+  ansible.builtin.set_fact:
+    installed_k3s_version: >-
+      {{ k3s_version_check.stdout_lines[0].split()[2] }}
+  when: k3s_binary.stat.exists
+
+- name: Fail on K3s version drift
+  ansible.builtin.fail:
+    msg: >-
+      Installed K3s version {{ installed_k3s_version }} does not match the pinned
+      version {{ k3s_version }}. This role will not upgrade or downgrade K3s automatically.
+  when:
+    - k3s_binary.stat.exists
+    - installed_k3s_version != k3s_version
+
+- name: Download K3s install script
+  ansible.builtin.get_url:
+    url: "{{ k3s_install_script_url }}"
+    dest: /usr/local/bin/install-k3s.sh
+    mode: "0755"
+  when: not k3s_binary.stat.exists
+
+- name: Install K3s
+  ansible.builtin.command:
+    cmd: /usr/local/bin/install-k3s.sh
+  environment:
+    INSTALL_K3S_VERSION: "{{ k3s_version }}"
+  when: not k3s_binary.stat.exists
+
+- name: Ensure K3s service is enabled and started
+  ansible.builtin.service:
+    name: k3s
+    enabled: true
+    state: started
+
+- name: Wait for K3s kubeconfig
+  ansible.builtin.wait_for:
+    path: /etc/rancher/k3s/k3s.yaml
+    state: present
+    timeout: 120
+
+- name: Wait for Kubernetes API to become available
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 6443
+    state: started
+    timeout: 120
+
+- name: Wait until the K3s node is Ready
+  ansible.builtin.command:
+    cmd: /usr/local/bin/k3s kubectl get nodes --no-headers
+  register: k3s_nodes
+  changed_when: false
+  until: k3s_nodes.stdout is search('\\sReady\\s')
+  retries: 24
+  delay: 5
+  environment:
+    KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+
+- name: Ensure ubuntu kubeconfig directory exists
+  ansible.builtin.file:
+    path: "/home/{{ deployment_user }}/.kube"
+    state: directory
+    owner: "{{ deployment_user }}"
+    group: "{{ deployment_user }}"
+    mode: "0700"
+
+- name: Copy kubeconfig for ubuntu user
+  ansible.builtin.copy:
+    src: /etc/rancher/k3s/k3s.yaml
+    dest: "/home/{{ deployment_user }}/.kube/config"
+    remote_src: true
+    owner: "{{ deployment_user }}"
+    group: "{{ deployment_user }}"
+    mode: "0600"
+
+- name: Read installed K3s version after startup
+  ansible.builtin.command:
+    cmd: /usr/local/bin/k3s --version
+  register: installed_k3s_version_after_startup
+  changed_when: false
+
+- name: Assert pinned K3s version is active
+  ansible.builtin.assert:
+    that:
+      - installed_k3s_version_after_startup.stdout_lines[0].split()[2] == k3s_version
+    fail_msg: >-
+      Installed K3s version does not match the pinned version {{ k3s_version }}.

@@ -1,0 +1,60 @@
+---
+- name: Resolve Helm architecture
+  ansible.builtin.set_fact:
+    helm_archive_arch: "{{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(ansible_architecture, ansible_architecture) }}"
+
+- name: Assert Helm checksum is available for architecture
+  ansible.builtin.assert:
+    that:
+      - helm_archive_arch in helm_archive_checksums
+    fail_msg: "No pinned Helm checksum is configured for architecture {{ helm_archive_arch }}."
+
+- name: Check whether Helm is already installed
+  ansible.builtin.command:
+    cmd: /usr/local/bin/helm version --template={{ '{{' }} .Version {{ '}}' }}
+  register: helm_installed
+  failed_when: false
+  changed_when: false
+
+- name: Download Helm archive
+  ansible.builtin.get_url:
+    url: "https://get.helm.sh/helm-{{ helm_version }}-linux-{{ helm_archive_arch }}.tar.gz"
+    dest: "/tmp/helm-{{ helm_version }}-linux-{{ helm_archive_arch }}.tar.gz"
+    mode: "0644"
+    checksum: "sha256:{{ helm_archive_checksums[helm_archive_arch] }}"
+  when: helm_installed.rc != 0 or helm_installed.stdout != helm_version
+
+- name: Extract Helm archive
+  ansible.builtin.unarchive:
+    src: "/tmp/helm-{{ helm_version }}-linux-{{ helm_archive_arch }}.tar.gz"
+    dest: /tmp
+    remote_src: true
+  when: helm_installed.rc != 0 or helm_installed.stdout != helm_version
+
+- name: Install Helm binary
+  ansible.builtin.copy:
+    src: "/tmp/linux-{{ helm_archive_arch }}/helm"
+    dest: /usr/local/bin/helm
+    remote_src: true
+    mode: "0755"
+  when: helm_installed.rc != 0 or helm_installed.stdout != helm_version
+
+- name: Verify Helm executable is available
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/helm
+      - version
+      - --template
+      - "{{ '{{ .Version }}' }}"
+  register: helm_version_check
+  changed_when: false
+  environment:
+    KUBECONFIG: "/home/{{ deployment_user }}/.kube/config"
+
+- name: Confirm pinned Helm version is installed
+  ansible.builtin.assert:
+    that:
+      - helm_version_check.stdout == helm_version
+    fail_msg: >-
+      Installed Helm version {{ helm_version_check.stdout | default('unknown') }}
+      does not match the pinned version {{ helm_version }}.

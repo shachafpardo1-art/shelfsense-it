@@ -58,3 +58,5 @@ tests/*.sqlite3
 crash.log
 tfplan
 *.tfplan
+# Local Ansible inventory
+/ansible/inventory/hosts.ini
