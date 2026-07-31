@@ -4,7 +4,7 @@ This directory contains the Terraform configuration for the AWS infrastructure o
 
 ## Responsibility boundaries
 
-Terraform is responsible for provisioning AWS infrastructure, including:
+Terraform provisions the AWS infrastructure baseline, including:
 
 - VPC
 - Public subnet
@@ -13,11 +13,7 @@ Terraform is responsible for provisioning AWS infrastructure, including:
 - Security Group
 - EC2 Instance
 
-Ansible will configure the EC2 instance after Terraform creates it.
-
-Terraform creates infrastructure.
-
-Ansible configures the operating system and installs software.
+Ansible configures the EC2 instance after Terraform creates it, including the operating system baseline and Kubernetes tooling required for this milestone.
 
 ## Authentication
 
@@ -33,9 +29,11 @@ Supported authentication methods include:
 
 ## Current milestone
 
-This milestone only creates the Terraform foundation.
+The current validated flow is:
 
-No AWS resources are provisioned yet.
+`terraform init` -> `terraform fmt` -> `terraform validate` -> `terraform plan` -> reviewed `terraform apply` -> SSH access -> bootstrap -> Ansible -> K3s/Helm validation -> evidence capture -> `terraform destroy`
+
+The current defaults use a `t3.micro` instance type and an 8 GB root volume. These values are acceptable for the validated baseline and should be reviewed again in the next milestone.
 
 ## Common commands
 

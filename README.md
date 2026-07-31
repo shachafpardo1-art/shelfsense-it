@@ -144,4 +144,4 @@ When the stack starts, the `migrate` service waits for PostgreSQL to become heal
 
 The seed script is idempotent and identifies existing items by SKU, so repeated runs do not create duplicates. The backend starts only after database initialization completes successfully.
 
-The Helm deployment uses the same initialization flow through a pre-install and pre-upgrade migration Job.
+The Helm deployment uses the same initialization flow through a migration Job configured with the `post-install` and `pre-upgrade` hooks.
