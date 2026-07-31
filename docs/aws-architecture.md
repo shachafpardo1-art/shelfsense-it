@@ -4,23 +4,17 @@
 
 ShelfSense IT uses a simplified AWS architecture designed for a junior DevOps project.
 
-The goal is to demonstrate Infrastructure as Code, Configuration Management, CI/CD, Kubernetes and Monitoring while keeping cloud costs low.
+The goal is to demonstrate Infrastructure as Code, Configuration Management, CI/CD, Kubernetes, and Monitoring while keeping cloud costs low.
 
-Terraform provisions the AWS infrastructure.
+The current validated baseline uses Terraform to provision AWS infrastructure and Ansible to configure a single Ubuntu EC2 instance for K3s.
 
-Ansible configures the EC2 instance.
+Docker Compose remains a local development workflow only. AWS runtime validation is based on K3s with `containerd`, with application images stored in Docker Hub.
 
-Minikube hosts the Kubernetes cluster.
-
-Helm deploys the ShelfSense application.
-
-Jenkins provides the CI/CD pipeline.
-
-Prometheus and Grafana provide monitoring.
+The infrastructure workflow for this milestone is temporary by design: apply, validate, capture evidence, and destroy the resources after verification.
 
 ---
 
-## Planned Architecture
+## Current Validated Baseline
 
 ```text
                  Internet
@@ -35,80 +29,71 @@ Prometheus and Grafana provide monitoring.
                      |
               Ubuntu EC2 Instance
                      |
-        +------------+-------------+
-        |            |             |
-     Jenkins      Minikube      Monitoring
-                       |              |
-                     Helm     Prometheus
-                       |              |
-                ShelfSense App     Grafana
-                       |
-                  PostgreSQL
+          K3s v1.34.8+k3s1 (containerd)
+                     |
+               Helm v3.19.0
+                     |
+              kubeconfig access
 ```
-
----
-
-## Component Responsibilities
 
 ### Terraform
 
-Terraform creates the AWS infrastructure:
+Terraform creates the AWS infrastructure baseline:
 
 - VPC
-- Public Subnet
-- Internet Gateway
-- Route Table
-- Security Group
-- EC2 Instance
-
----
+- Public subnet
+- Internet gateway
+- Route table
+- Security group
+- EC2 instance
 
 ### Ansible
 
-Ansible configures the EC2 server after Terraform creates it.
+Ansible configures the Ubuntu server after Terraform creates it. The validated responsibilities for the current baseline are:
 
-Responsibilities include:
+- system bootstrap
+- 2 GiB swap configuration
+- K3s `v1.34.8+k3s1`
+- Helm `v3.19.0`
+- kubeconfig setup for cluster access
 
-- Docker
-- kubectl
-- Minikube
-- Helm
-- Jenkins
+### Kubernetes Runtime
+
+The validated Kubernetes runtime on AWS is K3s with `containerd`. Helm is installed and verified on the host. The final in-cluster ShelfSense deployment on AWS is still part of a later milestone.
+
+### Image Registry
+
+Application container images are stored in Docker Hub for both local and future cluster-based deployment flows.
+
+---
+
+## Planned Final Architecture
+
+The following components remain planned and should not be treated as already deployed in AWS:
+
+- Traefik ingress
+- Frontend and backend services exposed internally as `ClusterIP`
+- PostgreSQL as a StatefulSet
 - Prometheus
 - Grafana
+- Jenkins
 
----
+```text
+                 Internet
+                     |
+                  Traefik
+                     |
+        +------------+-------------+
+        |                          |
+   Frontend Service           Backend Service
+     (ClusterIP)               (ClusterIP)
+                                      |
+                                 PostgreSQL
+                                (StatefulSet)
 
-### Kubernetes
-
-Minikube hosts the Kubernetes cluster.
-
-Helm manages the deployment of:
-
-- Frontend
-- Backend
-- PostgreSQL
-
----
-
-### Jenkins
-
-Jenkins will:
-
-- Build images
-- Run automated tests
-- Push images to Docker Hub
-- Deploy updates to Kubernetes
-
----
-
-### Monitoring
-
-Prometheus collects metrics.
-
-Grafana visualizes dashboards.
-
----
+        Prometheus, Grafana, and Jenkins remain planned
+        for later deployment milestones.
+```
 
 ## Security Principles
 
