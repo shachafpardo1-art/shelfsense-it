@@ -4,7 +4,9 @@ timezone: UTC
 base_packages:
   - ca-certificates
   - curl
+  - e2fsprogs
   - gnupg
+  - nvme-cli
   - tzdata
 k3s_install_script_url: https://get.k3s.io
 k3s_version: v1.34.8+k3s1
@@ -14,3 +16,12 @@ helm_archive_checksums:
   arm64: 440cf7add0aee27ebc93fada965523c1dc2e0ab340d4348da2215737fc0d76ad
 swap_file_path: /swapfile
 swap_file_size: 2G
+persistent_postgres_volume_id: ""
+persistent_ebs_attachment_device_name: /dev/sdf
+persistent_postgres_mount_path: /srv/shelfsense/postgres
+persistent_postgres_filesystem: ext4
+persistent_postgres_mount_options: defaults,nofail
+persistent_postgres_owner: "999"
+persistent_postgres_group: "999"
+persistent_postgres_mode: "0750"
+postgres_storage_allow_initial_format: false

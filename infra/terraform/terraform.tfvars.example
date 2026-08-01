@@ -11,3 +11,9 @@ ssh_allowed_cidr = "YOUR_PUBLIC_IP/32"
 key_pair_name    = "YOUR_EXISTING_AWS_KEY_PAIR"
 instance_type    = "m7i-flex.large"
 root_volume_size = 30
+
+# Copy these values from the reviewed infra/persistence outputs into the local,
+# ignored terraform.tfvars file. This example volume ID is not a real resource.
+persistent_postgres_volume_id                = "vol-00000000000000000"
+persistent_postgres_availability_zone        = "eu-central-1a"
+persistent_postgres_attachment_device_name   = "/dev/sdf"

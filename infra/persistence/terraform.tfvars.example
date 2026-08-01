@@ -1,0 +1,5 @@
+aws_region       = "eu-central-1"
+availability_zone = "eu-central-1a"
+volume_size      = 10
+volume_type      = "gp3"
+project_name     = "shelfsense-it"

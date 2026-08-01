@@ -42,3 +42,14 @@ output "ssh_command" {
   description = "Example SSH command for connecting to the ShelfSense server."
   value       = "ssh -i <PRIVATE_KEY_PATH> ubuntu@${aws_instance.shelfsense_server.public_ip}"
 }
+
+output "persistent_postgres_volume_id" {
+  description = "ID of the attached PostgreSQL volume, passed through for the ignored Ansible inventory handoff."
+  value       = var.persistent_postgres_volume_id
+  sensitive   = true
+}
+
+output "persistent_postgres_attachment_device_name" {
+  description = "Requested EC2 attachment name; the Linux NVMe device is discovered separately by volume ID."
+  value       = aws_volume_attachment.postgres_data.device_name
+}
