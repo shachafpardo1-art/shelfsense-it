@@ -62,5 +62,20 @@ variable "key_pair_name" {
 variable "instance_type" {
   description = "EC2 instance type used for the ShelfSense server."
   type        = string
-  default     = "t3.micro"
+  default     = "m7i-flex.large"
+}
+
+variable "root_volume_size" {
+  description = "Size in GiB of the encrypted EC2 root gp3 volume."
+  type        = number
+  default     = 30
+
+  validation {
+    condition = (
+      var.root_volume_size >= 8 &&
+      var.root_volume_size <= 100 &&
+      floor(var.root_volume_size) == var.root_volume_size
+    )
+    error_message = "root_volume_size must be a whole number between 8 and 100 GiB."
+  }
 }
