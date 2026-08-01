@@ -1,6 +1,7 @@
 image:
   repository: postgres
-  tag: "16"
+  # Pin the reviewed Debian variant so the UID/GID 999 storage contract is stable.
+  tag: "16.14-trixie"
   pullPolicy: IfNotPresent
 
 database:
@@ -15,7 +16,14 @@ database:
 postgres:
   replicaCount: 1
   persistence:
-    size: 1Gi
+    pvName: shelfsense-postgres-pv
+    claimName: shelfsense-postgres-pvc
+    hostPath: /srv/shelfsense/postgres
+    size: 10Gi
+    storageClassName: ""
+    accessMode: ReadWriteOnce
+    reclaimPolicy: Retain
+    filesystemGroup: 999
   resources:
     requests:
       cpu: 100m

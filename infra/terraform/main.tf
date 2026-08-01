@@ -25,6 +25,13 @@ resource "aws_subnet" "public" {
   tags = {
     Name = "${var.project_name}-${var.environment}-public-subnet"
   }
+
+  lifecycle {
+    precondition {
+      condition     = can(regex("^${var.aws_region}[a-z]$", var.availability_zone))
+      error_message = "availability_zone must belong to aws_region; for example, eu-central-1a belongs to eu-central-1."
+    }
+  }
 }
 
 resource "aws_route_table" "public" {

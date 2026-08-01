@@ -100,21 +100,27 @@ PY
   [[ -n "$k3s_version" ]] || fail "Unable to read k3s_version from $vars_file"
   [[ -n "$helm_version" ]] || fail "Unable to read helm_version from $vars_file"
 
-  log "Reading EC2 public IP from Terraform outputs"
-  local server_ip
+  log "Reading runtime connection and storage metadata from Terraform outputs"
+  local server_ip persistent_postgres_volume_id persistent_ebs_attachment_device_name
   server_ip="$(terraform -chdir="$terraform_dir" output -raw ec2_public_ip 2>/dev/null || true)"
   [[ -n "$server_ip" ]] || fail "Terraform output ec2_public_ip is empty"
   [[ "$server_ip" != "null" ]] || fail "Terraform output ec2_public_ip is null"
   [[ "$server_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || fail "Terraform output is not a valid IPv4 address: $server_ip"
   awk -F. 'NF != 4 { exit 1 } { for (i = 1; i <= 4; i++) if ($i < 0 || $i > 255) exit 1 }' <<<"$server_ip" \
     || fail "Terraform output is not a valid IPv4 address: $server_ip"
+  persistent_postgres_volume_id="$(terraform -chdir="$terraform_dir" output -raw persistent_postgres_volume_id 2>/dev/null || true)"
+  [[ "$persistent_postgres_volume_id" =~ ^vol-[0-9a-f]{8,17}$ ]] \
+    || fail "Terraform output persistent_postgres_volume_id is missing or invalid"
+  persistent_ebs_attachment_device_name="$(terraform -chdir="$terraform_dir" output -raw persistent_postgres_attachment_device_name 2>/dev/null || true)"
+  [[ "$persistent_ebs_attachment_device_name" =~ ^/dev/sd[f-p]$ ]] \
+    || fail "Terraform output persistent_postgres_attachment_device_name is missing or invalid"
 
   log "Generating Ansible inventory atomically"
   TMP_INVENTORY_FILE="$(mktemp "$ansible_dir/inventory/hosts.ini.tmp.XXXXXX")"
   chmod 600 "$TMP_INVENTORY_FILE"
   cat >"$TMP_INVENTORY_FILE" <<EOF
 [production]
-shelfsense-server ansible_host=$server_ip ansible_port=22 ansible_user=ubuntu
+shelfsense-server ansible_host=$server_ip ansible_port=22 ansible_user=ubuntu persistent_postgres_volume_id=$persistent_postgres_volume_id persistent_ebs_attachment_device_name=$persistent_ebs_attachment_device_name
 EOF
   mv "$TMP_INVENTORY_FILE" "$inventory_file"
   TMP_INVENTORY_FILE=""

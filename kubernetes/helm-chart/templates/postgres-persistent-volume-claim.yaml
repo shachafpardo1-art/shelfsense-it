@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.postgres.persistence.claimName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "shelfsense.labels" . | nindent 4 }}
+    app.kubernetes.io/component: postgres
+spec:
+  accessModes:
+    - {{ .Values.postgres.persistence.accessMode }}
+  volumeMode: Filesystem
+  storageClassName: {{ .Values.postgres.persistence.storageClassName | quote }}
+  volumeName: {{ .Values.postgres.persistence.pvName }}
+  resources:
+    requests:
+      storage: {{ .Values.postgres.persistence.size }}

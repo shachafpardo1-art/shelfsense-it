@@ -1,0 +1,549 @@
+---
+- name: Validate persistent PostgreSQL storage inputs
+  ansible.builtin.assert:
+    that:
+      - persistent_postgres_volume_id is match('^vol-[0-9a-f]{8,17}$')
+      - persistent_ebs_attachment_device_name is match('^/dev/sd[f-p]$')
+      - persistent_postgres_mount_path == '/srv/shelfsense/postgres'
+      - persistent_postgres_filesystem == 'ext4'
+      - postgres_storage_allow_initial_format is boolean
+    fail_msg: Persistent PostgreSQL storage inputs are missing or invalid.
+
+- name: Build the Nitro EBS by-id path
+  ansible.builtin.set_fact:
+    persistent_postgres_by_id_path: >-
+      /dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_{{ persistent_postgres_volume_id | replace('-', '') }}
+
+- name: Wait for the exact persistent EBS volume to appear
+  ansible.builtin.wait_for:
+    path: "{{ persistent_postgres_by_id_path }}"
+    state: present
+    timeout: 120
+
+- name: Resolve the persistent EBS NVMe block device
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/readlink
+      - -f
+      - "{{ persistent_postgres_by_id_path }}"
+  register: persistent_postgres_device
+  changed_when: false
+
+- name: Validate the resolved Nitro block device
+  ansible.builtin.assert:
+    that:
+      - persistent_postgres_device.stdout_lines | length == 1
+      - persistent_postgres_device.stdout is match('^/dev/nvme[0-9]+n[0-9]+$')
+    fail_msg: The exact persistent EBS volume ID did not resolve unambiguously to an unpartitioned Nitro NVMe device.
+
+- name: Confirm the resolved path is a block device
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/test
+      - -b
+      - "{{ persistent_postgres_device.stdout }}"
+  changed_when: false
+
+- name: Inspect the persistent device topology
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/lsblk
+      - --noheadings
+      - --raw
+      - --paths
+      - --output
+      - NAME,TYPE
+      - "{{ persistent_postgres_device.stdout }}"
+  register: persistent_postgres_topology
+  changed_when: false
+
+- name: Refuse partitioned or ambiguous persistent devices
+  ansible.builtin.assert:
+    that:
+      - persistent_postgres_topology.stdout_lines | length == 1
+      - persistent_postgres_topology.stdout_lines[0].split()[-1] == 'disk'
+    fail_msg: The persistent EBS device contains partitions or has an ambiguous topology; refusing to format or mount it automatically.
+
+- name: Discover the root filesystem source
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --output
+      - SOURCE
+      - --target
+      - /
+  register: persistent_postgres_root_source
+  changed_when: false
+
+- name: Resolve the root filesystem source
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/readlink
+      - -f
+      - "{{ persistent_postgres_root_source.stdout }}"
+  register: persistent_postgres_root_source_realpath
+  changed_when: false
+
+- name: Discover the root filesystem parent disk
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/lsblk
+      - --noheadings
+      - --raw
+      - --output
+      - PKNAME
+      - "{{ persistent_postgres_root_source_realpath.stdout }}"
+  register: persistent_postgres_root_parent
+  changed_when: false
+
+- name: Select the root backing disk
+  ansible.builtin.set_fact:
+    persistent_postgres_root_disk: >-
+      {{ '/dev/' ~ (persistent_postgres_root_parent.stdout | trim)
+         if persistent_postgres_root_parent.stdout | trim | length > 0
+         else persistent_postgres_root_source_realpath.stdout }}
+
+- name: Inspect the complete root block-device tree
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/lsblk
+      - --noheadings
+      - --raw
+      - --paths
+      - --output
+      - NAME
+      - "{{ persistent_postgres_root_disk }}"
+  register: persistent_postgres_root_block_devices
+  changed_when: false
+
+- name: Refuse the root disk or any root parent or child device
+  ansible.builtin.assert:
+    that:
+      - persistent_postgres_device.stdout not in persistent_postgres_root_block_devices.stdout_lines
+    fail_msg: The persistent EBS mapping overlaps the root block-device tree; refusing all storage changes.
+
+- name: Detect an existing filesystem on the persistent device
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - -p
+      - -s
+      - TYPE
+      - -o
+      - value
+      - "{{ persistent_postgres_device.stdout }}"
+  register: persistent_postgres_filesystem_probe
+  changed_when: false
+  failed_when: persistent_postgres_filesystem_probe.rc not in [0, 2]
+
+- name: Inspect all persistent-device signatures without modifying them
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/wipefs
+      - --noheadings
+      - --output
+      - TYPE
+      - "{{ persistent_postgres_device.stdout }}"
+  register: persistent_postgres_signature_probe
+  changed_when: false
+
+- name: Validate filesystem detection before any formatting
+  ansible.builtin.assert:
+    that:
+      - >-
+        persistent_postgres_filesystem_probe.rc == 2 or
+        persistent_postgres_filesystem_probe.stdout | trim == persistent_postgres_filesystem
+      - >-
+        persistent_postgres_filesystem_probe.rc == 0 or
+        persistent_postgres_signature_probe.stdout | trim == ''
+    fail_msg: The persistent EBS device has an unsupported filesystem or ambiguous signatures; refusing to format it.
+
+- name: Record whether first-time formatting is required
+  ansible.builtin.set_fact:
+    persistent_postgres_needs_initial_format: >-
+      {{ persistent_postgres_filesystem_probe.rc == 2 and
+         persistent_postgres_signature_probe.stdout | trim == '' }}
+
+- name: Read the existing persistent filesystem UUID
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - -s
+      - UUID
+      - -o
+      - value
+      - "{{ persistent_postgres_device.stdout }}"
+  register: persistent_postgres_initial_uuid
+  changed_when: false
+  when: not persistent_postgres_needs_initial_format
+
+- name: Require a valid existing filesystem UUID
+  ansible.builtin.assert:
+    that:
+      - persistent_postgres_initial_uuid.stdout | trim | length > 0
+    fail_msg: The existing PostgreSQL filesystem does not have a readable UUID.
+  when: not persistent_postgres_needs_initial_format
+
+- name: Inspect the PostgreSQL mountpoint before any host mutation
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --evaluate
+      - --output
+      - SOURCE,UUID,FSTYPE
+      - --mountpoint
+      - "{{ persistent_postgres_mount_path }}"
+  register: persistent_postgres_initial_mount
+  changed_when: false
+  failed_when: persistent_postgres_initial_mount.rc not in [0, 1]
+
+- name: Refuse a foreign filesystem at the PostgreSQL mountpoint
+  ansible.builtin.assert:
+    that:
+      - >-
+        persistent_postgres_initial_mount.rc == 1 or
+        (
+          not persistent_postgres_needs_initial_format and
+          persistent_postgres_initial_mount.stdout.split() ==
+          [
+            persistent_postgres_device.stdout,
+            (persistent_postgres_initial_uuid.stdout | default('') | trim),
+            persistent_postgres_filesystem
+          ]
+        )
+    fail_msg: The PostgreSQL mountpoint is backed by a different source, UUID, or filesystem; refusing all host mutations.
+
+- name: Require explicit authorization for first-time formatting
+  ansible.builtin.fail:
+    msg: >-
+      The exact persistent EBS volume is signature-free and requires first-time initialization.
+      Verify that it is the new empty persistent volume, then rerun once with
+      postgres_storage_allow_initial_format=true. No formatting was performed.
+  when:
+    - persistent_postgres_needs_initial_format
+    - not postgres_storage_allow_initial_format
+
+- name: Resolve the exact EBS mapping again immediately before formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/readlink
+      - -f
+      - "{{ persistent_postgres_by_id_path }}"
+  register: persistent_postgres_preformat_device
+  changed_when: false
+  when: persistent_postgres_needs_initial_format and postgres_storage_allow_initial_format
+
+- name: Refuse a changed or ambiguous pre-format EBS mapping
+  ansible.builtin.assert:
+    that:
+      - persistent_postgres_preformat_device.stdout_lines | length == 1
+      - persistent_postgres_preformat_device.stdout is match('^/dev/nvme[0-9]+n[0-9]+$')
+      - persistent_postgres_preformat_device.stdout == persistent_postgres_device.stdout
+    fail_msg: The exact EBS-to-NVMe mapping changed, disappeared, or became ambiguous; refusing to format a stale device path.
+  when: persistent_postgres_needs_initial_format and postgres_storage_allow_initial_format
+
+- name: Reconfirm the pre-format path is a block device
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/test
+      - -b
+      - "{{ persistent_postgres_preformat_device.stdout }}"
+  changed_when: false
+  when: persistent_postgres_needs_initial_format and postgres_storage_allow_initial_format
+
+- name: Reinspect the pre-format device topology
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/lsblk
+      - --noheadings
+      - --raw
+      - --paths
+      - --output
+      - NAME,TYPE
+      - "{{ persistent_postgres_preformat_device.stdout }}"
+  register: persistent_postgres_preformat_topology
+  changed_when: false
+  when: persistent_postgres_needs_initial_format and postgres_storage_allow_initial_format
+
+- name: Rediscover the root filesystem source before formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --output
+      - SOURCE
+      - --target
+      - /
+  register: persistent_postgres_preformat_root_source
+  changed_when: false
+  when: persistent_postgres_needs_initial_format and postgres_storage_allow_initial_format
+
+- name: Resolve the current root filesystem source before formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/readlink
+      - -f
+      - "{{ persistent_postgres_preformat_root_source.stdout }}"
+  register: persistent_postgres_preformat_root_source_realpath
+  changed_when: false
+  when: persistent_postgres_needs_initial_format and postgres_storage_allow_initial_format
+
+- name: Rediscover the root filesystem parent disk before formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/lsblk
+      - --noheadings
+      - --raw
+      - --output
+      - PKNAME
+      - "{{ persistent_postgres_preformat_root_source_realpath.stdout }}"
+  register: persistent_postgres_preformat_root_parent
+  changed_when: false
+  when: persistent_postgres_needs_initial_format and postgres_storage_allow_initial_format
+
+- name: Select the current root backing disk before formatting
+  ansible.builtin.set_fact:
+    persistent_postgres_preformat_root_disk: >-
+      {{ '/dev/' ~ (persistent_postgres_preformat_root_parent.stdout | trim)
+         if persistent_postgres_preformat_root_parent.stdout | trim | length > 0
+         else persistent_postgres_preformat_root_source_realpath.stdout }}
+  when: persistent_postgres_needs_initial_format and postgres_storage_allow_initial_format
+
+- name: Reinspect the complete root block-device tree before formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/lsblk
+      - --noheadings
+      - --raw
+      - --paths
+      - --output
+      - NAME
+      - "{{ persistent_postgres_preformat_root_disk }}"
+  register: persistent_postgres_preformat_root_block_devices
+  changed_when: false
+  when: persistent_postgres_needs_initial_format and postgres_storage_allow_initial_format
+
+- name: Reprobe the filesystem immediately before formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - -p
+      - -s
+      - TYPE
+      - -o
+      - value
+      - "{{ persistent_postgres_preformat_device.stdout }}"
+  register: persistent_postgres_preformat_filesystem_probe
+  changed_when: false
+  failed_when: persistent_postgres_preformat_filesystem_probe.rc not in [0, 2]
+  when: persistent_postgres_needs_initial_format and postgres_storage_allow_initial_format
+
+- name: Reinspect signatures immediately before formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/wipefs
+      - --noheadings
+      - --output
+      - TYPE
+      - "{{ persistent_postgres_preformat_device.stdout }}"
+  register: persistent_postgres_preformat_signature_probe
+  changed_when: false
+  when: persistent_postgres_needs_initial_format and postgres_storage_allow_initial_format
+
+- name: Recheck the PostgreSQL mountpoint immediately before formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --mountpoint
+      - "{{ persistent_postgres_mount_path }}"
+  register: persistent_postgres_preformat_mount
+  changed_when: false
+  failed_when: persistent_postgres_preformat_mount.rc not in [0, 1]
+  when: persistent_postgres_needs_initial_format and postgres_storage_allow_initial_format
+
+- name: Authorize only the revalidated empty non-root device for formatting
+  ansible.builtin.assert:
+    that:
+      - persistent_postgres_preformat_topology.stdout_lines | length == 1
+      - persistent_postgres_preformat_topology.stdout_lines[0].split()[-1] == 'disk'
+      - persistent_postgres_preformat_device.stdout not in persistent_postgres_preformat_root_block_devices.stdout_lines
+      - persistent_postgres_preformat_filesystem_probe.rc == 2
+      - persistent_postgres_preformat_signature_probe.stdout | trim == ''
+      - persistent_postgres_preformat_mount.rc == 1
+    fail_msg: Pre-format safety revalidation failed; refusing to initialize the persistent EBS volume.
+  when: persistent_postgres_needs_initial_format and postgres_storage_allow_initial_format
+
+- name: Create ext4 on the explicitly authorized and revalidated new volume
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/mkfs.ext4
+      - -L
+      - shelfsense-postgres
+      - "{{ persistent_postgres_preformat_device.stdout }}"
+  when: persistent_postgres_needs_initial_format and postgres_storage_allow_initial_format
+
+- name: Resolve the exact EBS mapping after filesystem validation
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/readlink
+      - -f
+      - "{{ persistent_postgres_by_id_path }}"
+  register: persistent_postgres_final_device
+  changed_when: false
+
+- name: Require the validated EBS mapping to remain stable
+  ansible.builtin.assert:
+    that:
+      - persistent_postgres_final_device.stdout_lines | length == 1
+      - persistent_postgres_final_device.stdout == persistent_postgres_device.stdout
+    fail_msg: The exact EBS-to-NVMe mapping changed after validation; refusing mount or fstab changes.
+
+- name: Read the persistent filesystem UUID
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - -s
+      - UUID
+      - -o
+      - value
+      - "{{ persistent_postgres_final_device.stdout }}"
+  register: persistent_postgres_uuid
+  changed_when: false
+
+- name: Require a valid filesystem UUID
+  ansible.builtin.assert:
+    that:
+      - persistent_postgres_uuid.stdout | trim | length > 0
+    fail_msg: The persistent PostgreSQL filesystem does not have a readable UUID.
+
+- name: Recheck the PostgreSQL mountpoint before directory or fstab changes
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --evaluate
+      - --output
+      - SOURCE,UUID,FSTYPE
+      - --mountpoint
+      - "{{ persistent_postgres_mount_path }}"
+  register: persistent_postgres_active_mount
+  changed_when: false
+  failed_when: persistent_postgres_active_mount.rc not in [0, 1]
+
+- name: Require an empty mountpoint or the exact expected filesystem
+  ansible.builtin.assert:
+    that:
+      - >-
+        persistent_postgres_active_mount.rc == 1 or
+        persistent_postgres_active_mount.stdout.split() ==
+        [
+          persistent_postgres_final_device.stdout,
+          (persistent_postgres_uuid.stdout | trim),
+          persistent_postgres_filesystem
+        ]
+    fail_msg: The PostgreSQL mountpoint is backed by a different source, UUID, or filesystem; refusing directory, fstab, and mount changes.
+
+- name: Check whether the persistent filesystem is mounted elsewhere
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --output
+      - TARGET
+      - --source
+      - "UUID={{ persistent_postgres_uuid.stdout | trim }}"
+  register: persistent_postgres_source_mount
+  changed_when: false
+  failed_when: persistent_postgres_source_mount.rc not in [0, 1]
+
+- name: Refuse the persistent filesystem mounted at another path
+  ansible.builtin.assert:
+    that:
+      - >-
+        persistent_postgres_source_mount.rc == 1 or
+        persistent_postgres_source_mount.stdout_lines == [persistent_postgres_mount_path]
+    fail_msg: The persistent EBS filesystem is already mounted at an unexpected path.
+
+- name: Ensure the validated PostgreSQL mountpoint directory exists
+  ansible.builtin.file:
+    path: "{{ persistent_postgres_mount_path }}"
+    state: directory
+
+- name: Build the persistent fstab entry
+  ansible.builtin.set_fact:
+    persistent_postgres_fstab_entry: >-
+      UUID={{ persistent_postgres_uuid.stdout | trim }} {{ persistent_postgres_mount_path }} {{ persistent_postgres_filesystem }} {{ persistent_postgres_mount_options }} 0 2
+
+- name: Read existing fstab entries for the PostgreSQL mountpoint
+  ansible.builtin.shell: >-
+    awk '!/^[[:space:]]*#/ && NF >= 2 && $2 == "{{ persistent_postgres_mount_path }}" { print }' /etc/fstab
+  args:
+    executable: /bin/bash
+  register: persistent_postgres_existing_fstab
+  changed_when: false
+
+- name: Refuse conflicting fstab entries
+  ansible.builtin.assert:
+    that:
+      - persistent_postgres_existing_fstab.stdout_lines | length <= 1
+      - >-
+        persistent_postgres_existing_fstab.stdout_lines | length == 0 or
+        persistent_postgres_existing_fstab.stdout_lines[0] == persistent_postgres_fstab_entry
+    fail_msg: A conflicting fstab entry exists for the PostgreSQL mountpoint.
+
+- name: Persist the PostgreSQL filesystem mount by UUID
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: "^[^#]+\\s+{{ persistent_postgres_mount_path | regex_escape }}\\s+"
+    line: "{{ persistent_postgres_fstab_entry }}"
+    state: present
+
+- name: Mount the retained PostgreSQL filesystem
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/mount
+      - "{{ persistent_postgres_mount_path }}"
+  when: persistent_postgres_active_mount.rc == 1
+
+- name: Verify the mounted PostgreSQL filesystem
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --evaluate
+      - --output
+      - SOURCE,UUID,FSTYPE
+      - --mountpoint
+      - "{{ persistent_postgres_mount_path }}"
+  register: persistent_postgres_verified_mount
+  changed_when: false
+
+- name: Assert the expected filesystem is mounted by source and UUID
+  ansible.builtin.assert:
+    that:
+      - >-
+        persistent_postgres_verified_mount.stdout.split() ==
+        [
+          persistent_postgres_final_device.stdout,
+          (persistent_postgres_uuid.stdout | trim),
+          persistent_postgres_filesystem
+        ]
+    fail_msg: PostgreSQL storage mount verification failed.
+
+- name: Prepare the mounted directory for the PostgreSQL container
+  ansible.builtin.file:
+    path: "{{ persistent_postgres_mount_path }}"
+    state: directory
+    owner: "{{ persistent_postgres_owner }}"
+    group: "{{ persistent_postgres_group }}"
+    mode: "{{ persistent_postgres_mode }}"

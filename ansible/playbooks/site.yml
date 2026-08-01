@@ -6,5 +6,6 @@
 
   roles:
     - common
+    - storage
     - k3s
     - helm

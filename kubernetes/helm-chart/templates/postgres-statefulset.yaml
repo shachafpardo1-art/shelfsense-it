@@ -19,6 +19,9 @@ spec:
         app.kubernetes.io/managed-by: {{ .Release.Service }}
         app.kubernetes.io/part-of: shelfsense-it
     spec:
+      securityContext:
+        fsGroup: {{ .Values.postgres.persistence.filesystemGroup }}
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: postgres
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
@@ -64,15 +67,7 @@ spec:
           volumeMounts:
             - name: postgres-data
               mountPath: /var/lib/postgresql/data
-  volumeClaimTemplates:
-    - metadata:
-        name: postgres-data
-        labels:
-          {{- include "shelfsense.labels" . | nindent 10 }}
-          app.kubernetes.io/component: postgres
-      spec:
-        accessModes:
-          - ReadWriteOnce
-        resources:
-          requests:
-            storage: {{ .Values.postgres.persistence.size }}
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.postgres.persistence.claimName }}
