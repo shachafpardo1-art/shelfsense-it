@@ -33,7 +33,13 @@ The current validated flow is:
 
 `terraform init` -> `terraform fmt` -> `terraform validate` -> `terraform plan` -> reviewed `terraform apply` -> SSH access -> bootstrap -> Ansible -> K3s/Helm validation -> evidence capture -> `terraform destroy`
 
-The current defaults use a `t3.micro` instance type and an 8 GB root volume. These values are acceptable for the validated baseline and should be reviewed again in the next milestone.
+The temporary, cost-controlled lab runtime uses an `m7i-flex.large` instance with 2 vCPU and 8 GiB RAM. It is x86_64 and compatible with the existing Ubuntu 22.04 amd64, K3s, containerd, Docker images, and Helm baseline.
+
+The root disk is a configurable 30 GiB encrypted `gp3` volume. Ansible separately provides the persistent 2 GiB swap configuration.
+
+The `m7i-flex.large` instance was verified as Free Tier eligible for this project account and is offered in `eu-central-1a`. It was selected after AWS rejected `t3a.large` because the account restricts EC2 launches to Free Tier eligible instance types. This eligibility statement applies to the active project account and is not a general claim for every AWS account.
+
+The persistent `infra/budget` stack remains separate from this temporary runtime stack. Destroy the runtime when it is not actively being used, and have every Terraform plan externally reviewed before apply.
 
 ## Common commands
 
