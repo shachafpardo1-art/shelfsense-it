@@ -129,11 +129,7 @@ The Helm chart now defines the K3s application routing layer:
 - Frontend and backend services exposed internally as `ClusterIP`
 - PostgreSQL as a StatefulSet
 
-The following components remain planned and should not be treated as already deployed in AWS:
-
-- Prometheus
-- Grafana
-- Jenkins
+The monitoring configuration is a separate Helm release in the `monitoring` namespace. Jenkins remains planned and should not be treated as already deployed in AWS.
 
 ```text
                  Internet
@@ -148,11 +144,13 @@ The following components remain planned and should not be treated as already dep
                                  PostgreSQL
                                 (StatefulSet)
 
-        Prometheus, Grafana, and Jenkins remain planned
-        for later deployment milestones.
+        Prometheus scrapes backend metrics internally
+        Grafana is available only through port-forward
 ```
 
-Traefik accepts HTTP requests on the EC2 public IP because the default Ingress rule does not require a host name. It sends `/api` and the operational endpoints `/health`, `/ready`, and `/metrics` to the backend ClusterIP Service; the catch-all `/` route goes to the frontend ClusterIP Service. A configured `ingress.host` narrows matching to that DNS host. DNS provisioning and TLS termination are outside this milestone.
+Traefik accepts HTTP requests on the EC2 public IP because the default Ingress rule does not require a host name. It sends `/api` and the operational endpoints `/health` and `/ready` to the backend ClusterIP Service; the catch-all `/` route goes to the frontend ClusterIP Service. The `/metrics` endpoint is not publicly routed. Prometheus reaches it internally through the backend ClusterIP Service and a ServiceMonitor.
+
+Prometheus, Grafana, Alertmanager, kube-state-metrics, and node-exporter are managed by a separate `kube-prometheus-stack` Helm release in the `monitoring` namespace. Grafana is ClusterIP-only and accessed with `kubectl port-forward`. Monitoring storage is ephemeral and does not use the PostgreSQL EBS volume. A configured `ingress.host` narrows public application routing to that DNS host. DNS provisioning and TLS termination are outside this milestone.
 
 ## Security Principles
 

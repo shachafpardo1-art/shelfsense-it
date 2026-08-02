@@ -1,0 +1,20 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: shelfsense-backend
+  namespace: shelfsense
+  labels:
+    app.kubernetes.io/name: shelfsense
+    app.kubernetes.io/component: backend
+spec:
+  namespaceSelector:
+    matchNames:
+      - shelfsense
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: shelfsense
+      app.kubernetes.io/component: backend
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

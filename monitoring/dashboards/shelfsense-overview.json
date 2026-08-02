@@ -1,0 +1,88 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 0, "y": 0},
+      "id": 1,
+      "targets": [{"expr": "sum(rate(shelfsense_http_requests_total{namespace=\"shelfsense\", service=\"shelfsense-backend\"}[5m]))", "legendFormat": "requests", "refId": "A"}],
+      "title": "Backend HTTP request rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 8, "y": 0},
+      "id": 2,
+      "targets": [{"expr": "sum(rate(shelfsense_http_requests_total{namespace=\"shelfsense\", service=\"shelfsense-backend\", status_code=~\"5..\"}[5m]))", "legendFormat": "5xx", "refId": "A"}],
+      "title": "Backend 5xx error rate",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 8, "x": 16, "y": 0},
+      "id": 3,
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le) (rate(shelfsense_http_request_duration_seconds_bucket{namespace=\"shelfsense\", service=\"shelfsense-backend\"}[5m])))", "legendFormat": "p95", "refId": "A"}],
+      "title": "Request latency",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 6, "x": 0, "y": 7},
+      "id": 4,
+      "targets": [{"expr": "sum(shelfsense_http_active_requests{namespace=\"shelfsense\", service=\"shelfsense-backend\"})", "legendFormat": "active", "refId": "A"}],
+      "title": "Requests in progress",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "cores"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 6, "x": 6, "y": 7},
+      "id": 5,
+      "targets": [{"expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"shelfsense\", pod=~\"shelfsense-backend.*\", container=\"backend\"}[5m]))", "legendFormat": "backend", "refId": "A"}],
+      "title": "Backend pod CPU",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 6, "x": 12, "y": 7},
+      "id": 6,
+      "targets": [{"expr": "sum(container_memory_working_set_bytes{namespace=\"shelfsense\", pod=~\"shelfsense-backend.*\", container=\"backend\"})", "legendFormat": "backend", "refId": "A"}],
+      "title": "Backend pod memory",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"unit": "short"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 6, "x": 18, "y": 7},
+      "id": 7,
+      "targets": [{"expr": "kube_deployment_status_replicas_available{namespace=\"shelfsense\", deployment=\"shelfsense-backend\"}", "legendFormat": "available", "refId": "A"}],
+      "title": "Deployment available replicas",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "fieldConfig": {"defaults": {"max": 100, "min": 0, "unit": "percent"}, "overrides": []},
+      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 14},
+      "id": 8,
+      "targets": [{"expr": "100 * (1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m])))", "legendFormat": "node CPU", "refId": "A"}],
+      "title": "Node CPU utilization",
+      "type": "timeseries"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["shelfsense"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
+  "title": "ShelfSense Overview",
+  "uid": "shelfsense-overview",
+  "version": 1
+}
