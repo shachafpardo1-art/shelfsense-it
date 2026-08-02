@@ -48,7 +48,7 @@ backend:
 
   image:
     repository: shachafpardo/shelfsense-backend
-    tag: "0.1.1"
+    tag: "0.2.0"
     pullPolicy: IfNotPresent
 
   service:
@@ -80,6 +80,9 @@ backend:
 migration:
   backoffLimit: 3
   activeDeadlineSeconds: 300
+  databaseWait:
+    maxAttempts: 30
+    retrySeconds: 5
 
   resources:
     requests:
@@ -94,14 +97,13 @@ frontend:
 
   image:
     repository: shachafpardo/shelfsense-frontend
-    tag: "0.1.1"
+    tag: "0.2.0"
     pullPolicy: IfNotPresent
 
   service:
     name: shelfsense-frontend
-    type: NodePort
+    type: ClusterIP
     port: 80
-    nodePort: 30080
 
   resources:
     requests:
@@ -124,3 +126,10 @@ frontend:
     periodSeconds: 15
     timeoutSeconds: 5
     failureThreshold: 3
+
+ingress:
+  enabled: true
+  className: traefik
+  # Leave empty to accept requests addressed directly to the node's public IP.
+  host: ""
+  annotations: {}

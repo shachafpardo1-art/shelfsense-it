@@ -121,13 +121,16 @@ Application container images are stored in Docker Hub for both local and future 
 
 ---
 
-## Planned Final Architecture
+## K3s Application Architecture
 
-The following components remain planned and should not be treated as already deployed in AWS:
+The Helm chart now defines the K3s application routing layer:
 
 - Traefik ingress
 - Frontend and backend services exposed internally as `ClusterIP`
 - PostgreSQL as a StatefulSet
+
+The following components remain planned and should not be treated as already deployed in AWS:
+
 - Prometheus
 - Grafana
 - Jenkins
@@ -148,6 +151,8 @@ The following components remain planned and should not be treated as already dep
         Prometheus, Grafana, and Jenkins remain planned
         for later deployment milestones.
 ```
+
+Traefik accepts HTTP requests on the EC2 public IP because the default Ingress rule does not require a host name. It sends `/api` and the operational endpoints `/health`, `/ready`, and `/metrics` to the backend ClusterIP Service; the catch-all `/` route goes to the frontend ClusterIP Service. A configured `ingress.host` narrows matching to that DNS host. DNS provisioning and TLS termination are outside this milestone.
 
 ## Security Principles
 

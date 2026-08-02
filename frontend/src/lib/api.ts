@@ -6,7 +6,7 @@ import type {
 } from "../types/api";
 
 const apiBaseUrl = (
-  import.meta.env.VITE_API_BASE_URL ?? "/api/v1"
+  import.meta.env.VITE_API_BASE_URL || "/api/v1"
 ).replace(/\/+$/, "");
 
 export class ApiError extends Error {
