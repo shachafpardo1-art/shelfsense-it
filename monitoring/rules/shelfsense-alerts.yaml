@@ -1,0 +1,29 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: shelfsense-alerts
+  namespace: shelfsense
+  labels:
+    app.kubernetes.io/name: shelfsense
+    app.kubernetes.io/component: backend
+spec:
+  groups:
+    - name: shelfsense.backend
+      rules:
+        - alert: ShelfSenseBackendTargetUnavailable
+          expr: max(up{namespace="shelfsense", service="shelfsense-backend"}) < 1 or absent(up{namespace="shelfsense", service="shelfsense-backend"})
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: ShelfSense backend metrics target is unavailable
+            description: Prometheus has been unable to scrape a ShelfSense backend target for five minutes.
+
+        - alert: ShelfSenseBackendElevated5xxRate
+          expr: sum(rate(shelfsense_http_requests_total{namespace="shelfsense", service="shelfsense-backend", status_code=~"5.."}[5m])) > 0.1
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: ShelfSense backend 5xx rate is elevated
+            description: The ShelfSense backend has returned more than 0.1 HTTP 5xx responses per second for ten minutes.

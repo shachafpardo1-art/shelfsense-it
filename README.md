@@ -176,7 +176,10 @@ http://<EC2_PUBLIC_IP>/             -> frontend Service
 http://<EC2_PUBLIC_IP>/api         -> backend Service
 http://<EC2_PUBLIC_IP>/health      -> backend Service
 http://<EC2_PUBLIC_IP>/ready       -> backend Service
-http://<EC2_PUBLIC_IP>/metrics     -> backend Service
 ```
 
 The frontend image defaults to the same-origin API base `/api/v1`. Browser API calls therefore return through Traefik to the backend without a hard-coded hostname or cross-origin configuration. Set `ingress.host` when a DNS name becomes available, or set `ingress.enabled: false` when ingress is managed separately. TLS certificates, HTTPS configuration, and DNS provisioning are deliberately outside this milestone.
+
+## K3s monitoring
+
+The lightweight monitoring stack is installed as a separate `kube-prometheus-stack` Helm release in the `monitoring` namespace. Prometheus scrapes the backend `/metrics` endpoint internally through the `shelfsense-backend` ClusterIP Service; Traefik no longer exposes `/metrics` publicly. Grafana remains ClusterIP-only and is accessed with `kubectl port-forward`. Prometheus, Alertmanager, and Grafana storage is ephemeral. Installation and validation commands are in [`monitoring/README.md`](monitoring/README.md).
