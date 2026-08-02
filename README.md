@@ -166,3 +166,17 @@ When the stack starts, the `migrate` service waits for PostgreSQL to become heal
 The seed script is idempotent and identifies existing items by SKU, so repeated runs do not create duplicates. The backend starts only after database initialization completes successfully.
 
 The Helm deployment uses the same initialization flow through a migration Job configured with the `post-install` and `pre-upgrade` hooks.
+
+## K3s application access
+
+The Helm chart uses the Traefik ingress controller included with K3s as the public HTTP entry point. Both application Services are `ClusterIP` by default, so they remain reachable only inside the cluster. With the default empty ingress host, Traefik accepts requests sent to the EC2 public IP without requiring DNS:
+
+```text
+http://<EC2_PUBLIC_IP>/             -> frontend Service
+http://<EC2_PUBLIC_IP>/api         -> backend Service
+http://<EC2_PUBLIC_IP>/health      -> backend Service
+http://<EC2_PUBLIC_IP>/ready       -> backend Service
+http://<EC2_PUBLIC_IP>/metrics     -> backend Service
+```
+
+The frontend image defaults to the same-origin API base `/api/v1`. Browser API calls therefore return through Traefik to the backend without a hard-coded hostname or cross-origin configuration. Set `ingress.host` when a DNS name becomes available, or set `ingress.enabled: false` when ingress is managed separately. TLS certificates, HTTPS configuration, and DNS provisioning are deliberately outside this milestone.

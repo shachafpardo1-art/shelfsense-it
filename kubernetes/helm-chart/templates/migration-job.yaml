@@ -33,7 +33,28 @@ spec:
           command:
             - sh
             - -c
-            - alembic upgrade head && python -m scripts.seed_items
+            - |
+              set -eu
+
+              attempt=1
+              max_attempts={{ .Values.migration.databaseWait.maxAttempts }}
+              retry_seconds={{ .Values.migration.databaseWait.retrySeconds }}
+
+              while ! python -c 'import os; from sqlalchemy import create_engine; engine = create_engine(os.environ["DATABASE_URL"]); connection = engine.connect(); connection.close(); engine.dispose()'; do
+                if [ "$attempt" -ge "$max_attempts" ]; then
+                  echo "PostgreSQL did not become available after ${max_attempts} attempts; aborting migration." >&2
+                  exit 1
+                fi
+
+                echo "PostgreSQL unavailable (attempt ${attempt}/${max_attempts}); retrying in ${retry_seconds}s..."
+                attempt=$((attempt + 1))
+                sleep "$retry_seconds"
+              done
+
+              echo "PostgreSQL is available; applying migrations."
+              alembic upgrade head
+              echo "Migrations complete; seeding inventory items."
+              python -m scripts.seed_items
 
           env:
             - name: DATABASE_URL
