@@ -53,3 +53,13 @@ output "persistent_postgres_attachment_device_name" {
   description = "Requested EC2 attachment name; the Linux NVMe device is discovered separately by volume ID."
   value       = aws_volume_attachment.postgres_data.device_name
 }
+
+output "persistent_jenkins_volume_id" {
+  description = "ID of the attached Jenkins controller volume, passed through for the Ansible storage handoff."
+  value       = var.persistent_jenkins_volume_id
+}
+
+output "persistent_jenkins_attachment_device_name" {
+  description = "Requested Jenkins EC2 attachment name; the Linux NVMe device is discovered separately by volume ID."
+  value       = aws_volume_attachment.jenkins_data.device_name
+}

@@ -121,3 +121,24 @@ variable "persistent_postgres_attachment_device_name" {
     error_message = "persistent_postgres_attachment_device_name must be an EC2 device name from /dev/sdf through /dev/sdp."
   }
 }
+
+variable "persistent_jenkins_volume_id" {
+  description = "ID of the existing Jenkins controller EBS volume owned by infra/persistence."
+  type        = string
+
+  validation {
+    condition     = can(regex("^vol-[0-9a-f]{8,17}$", var.persistent_jenkins_volume_id))
+    error_message = "persistent_jenkins_volume_id must be a non-empty valid EBS volume ID."
+  }
+}
+
+variable "persistent_jenkins_attachment_device_name" {
+  description = "Requested EC2 attachment name for Jenkins data. Nitro exposes the volume under an NVMe name discovered by volume ID."
+  type        = string
+  default     = "/dev/sdg"
+
+  validation {
+    condition     = can(regex("^/dev/sd[f-p]$", var.persistent_jenkins_attachment_device_name))
+    error_message = "persistent_jenkins_attachment_device_name must be an EC2 device name from /dev/sdf through /dev/sdp."
+  }
+}

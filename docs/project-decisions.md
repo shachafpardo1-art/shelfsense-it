@@ -20,3 +20,12 @@
 - Jenkins receives restricted namespace RBAC, so the cluster-scoped PostgreSQL PersistentVolume is infrastructure-managed separately from application releases.
 - The standalone PV is applied once; the ShelfSense Helm release continues to own the namespaced PersistentVolumeClaim and PostgreSQL StatefulSet.
 - The existing cluster completed the Helm keep-policy transition before externalization, so no PV deletion or recreation was required. Normal Helm operations do not manage the PV, and explicit PV or EBS deletion requires a separate destructive decision.
+
+## Jenkins Controller Storage
+
+- Jenkins controller state lives on a dedicated encrypted retained 10 GiB `gp3` EBS volume mounted at `/var/lib/jenkins`, separate from PostgreSQL storage and the disposable runtime state.
+- Runtime teardown removes only the Jenkins attachment. After EC2 replacement, the same volume is reattached and remounted before Jenkins starts, preserving plugins, credentials, configuration, and build history.
+- Initial formatting is disabled by default and may be authorized only for a verified signature-free new volume. The storage milestone uses temporary `root:root` ownership; the later Jenkins role sets `jenkins:jenkins` after package installation and before first startup.
+- Explicit Jenkins EBS deletion requires a separate destructive decision. Retained storage improves lifecycle durability but is not a backup.
+- `/var/lib/jenkins` uses an fstab `nofail` mount so a missing Jenkins data disk cannot block the EC2/K3s host from booting.
+- Before Jenkins is ever enabled or started, its later systemd role must add `RequiresMountsFor=/var/lib/jenkins`, verify the expected UUID-backed mount, and assign `jenkins:jenkins` ownership. If the retained mount is absent or mismatched, Jenkins remains stopped instead of writing controller state to the EC2 root volume.
