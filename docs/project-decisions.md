@@ -17,6 +17,6 @@
 
 ## Kubernetes Storage Lifecycle
 
-- Jenkins will receive restricted namespace RBAC, so cluster-scoped PostgreSQL storage will eventually be provisioned separately from application releases.
-- This branch is a transition release only: the PersistentVolume remains in Helm and gains `helm.sh/resource-policy: keep`. The keep policy must be recorded by a successful Helm release before a later branch removes the PV from Helm and adds a standalone infrastructure manifest.
-- The transition does not delete or recreate the PV and does not change its storage or binding contract.
+- Jenkins receives restricted namespace RBAC, so the cluster-scoped PostgreSQL PersistentVolume is infrastructure-managed separately from application releases.
+- The standalone PV is applied once; the ShelfSense Helm release continues to own the namespaced PersistentVolumeClaim and PostgreSQL StatefulSet.
+- The existing cluster completed the Helm keep-policy transition before externalization, so no PV deletion or recreation was required. Normal Helm operations do not manage the PV, and explicit PV or EBS deletion requires a separate destructive decision.
