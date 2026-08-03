@@ -14,3 +14,9 @@
 
 - A Terraform-managed Elastic IP provides a stable endpoint for Jenkins, GitHub webhooks, SSH, and the application.
 - The Elastic IP is part of the disposable runtime root and must be released during teardown to avoid ongoing charges.
+
+## Kubernetes Storage Lifecycle
+
+- Jenkins will receive restricted namespace RBAC, so cluster-scoped PostgreSQL storage will eventually be provisioned separately from application releases.
+- This branch is a transition release only: the PersistentVolume remains in Helm and gains `helm.sh/resource-policy: keep`. The keep policy must be recorded by a successful Helm release before a later branch removes the PV from Helm and adds a standalone infrastructure manifest.
+- The transition does not delete or recreate the PV and does not change its storage or binding contract.

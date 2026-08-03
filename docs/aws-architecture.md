@@ -69,7 +69,7 @@ Ansible configures the Ubuntu server after Terraform creates it. The validated r
 
 The validated Kubernetes runtime on AWS is K3s with `containerd`. Helm is installed and verified on the host. The final in-cluster ShelfSense deployment on AWS is still part of a later milestone.
 
-The Helm chart defines a static PersistentVolume with reclaim policy `Retain` and an explicitly bound PersistentVolumeClaim backed by `/srv/shelfsense/postgres`. PostgreSQL no longer uses the default K3s local-path provisioner for the AWS persistence path. The chart pins `postgres:16.14-trixie` so the reviewed PostgreSQL 16 behavior and UID/GID 999 storage contract do not drift with the mutable `postgres:16` tag.
+The Helm chart temporarily defines the static PersistentVolume with reclaim policy `Retain` and the explicitly bound PersistentVolumeClaim backed by `/srv/shelfsense/postgres`. The PV now carries `helm.sh/resource-policy: keep` as a transition step. PostgreSQL does not use the default K3s local-path provisioner for the AWS persistence path. The chart pins `postgres:16.14-trixie` so the reviewed PostgreSQL 16 behavior and UID/GID 999 storage contract do not drift with the mutable `postgres:16` tag.
 
 ### Single-node hostPath constraint
 
@@ -96,11 +96,11 @@ The data survives Pod recreation, Helm upgrades, EC2 replacement, and disposable
 
 ### Kubernetes metadata lifecycle and recovery
 
-The EBS filesystem lifecycle and the Kubernetes PV/PVC metadata lifecycle are separate. Neither the PV nor the PVC template formats or deletes the host filesystem. The PV reclaim policy remains `Retain`, but that policy does not prevent an operator or Helm from deleting the Kubernetes PV object itself.
+The EBS filesystem lifecycle and the Kubernetes PV/PVC metadata lifecycle are separate. Neither the PV nor the PVC template formats or deletes the host filesystem. The PV reclaim policy remains `Retain`, but that policy does not prevent an operator or an older Helm release without the keep policy from deleting the Kubernetes PV object itself.
 
 - **Pod restart:** the existing bound PVC is reused; no storage metadata is recreated.
 - **Helm upgrade:** normal application/configuration upgrades reuse the existing PV/PVC. Treat the PV host path and storage class, and the PVC volume binding, storage class, and access mode as immutable or binding-critical. Do not use an upgrade to change those fields; stop the workload and use controlled metadata recreation instead. Size increases also require a separately reviewed EBS and filesystem growth procedure and are not implemented here.
-- **Helm uninstall:** this chart intentionally has no `helm.sh/resource-policy: keep` annotations. Uninstall removes the chart-owned StatefulSet, PVC, and PV metadata. It does not delete or format `/srv/shelfsense/postgres` or the underlying EBS volume. A later install in the same namespace creates fresh PV/PVC metadata and explicitly binds it over the unchanged mounted data.
+- **Helm uninstall:** after the keep annotation is recorded in a successful Helm release, Helm must preserve the PV while removing the chart-owned StatefulSet and PVC. The annotation does not protect the PV until that transition release succeeds. Neither operation formats `/srv/shelfsense/postgres` or deletes the underlying EBS volume.
 - **Namespace deletion:** deletion removes the namespaced PVC and Helm release records, while the cluster-scoped PV can remain in `Released` with the deleted claim recorded in `spec.claimRef`. `Released` means the prior claim is gone; it does not mean the retained data was erased or that the PV can bind automatically to a new claim.
 - **EC2/K3s runtime recreation:** reattach the retained EBS volume in the same Availability Zone, run the controlled Ansible mount workflow, then install the chart into the new cluster. Fresh PV/PVC metadata is created over the remounted data; no Helm ownership adoption is used.
 - **Explicit EBS persistence deletion:** this is a separate, destructive operation against `infra/persistence`. It is never part of Helm uninstall, namespace deletion, or disposable runtime teardown, and it requires its own reviewed authorization and backup decision.
@@ -114,6 +114,12 @@ Supported recovery after namespace deletion or any leftover `Released` PV:
 5. Verify the claim is `Bound` and PostgreSQL sees the retained data before resuming normal deployment.
 
 If the PV/PVC name, host path, storage class, access mode, or explicit claim binding must change, use the same stopped-workload metadata-recreation procedure rather than Helm upgrade. This project does not support adopting Helm resources retained from an earlier release.
+
+### Existing-release PV migration
+
+This branch is only the transition release: the PV remains rendered by Helm with `helm.sh/resource-policy: keep`, and no PV deletion or recreation is part of the transition. The transition must complete successfully so the annotation is recorded in Helm release metadata before storage ownership changes.
+
+A later, separate branch will remove the PV from the Helm chart and add the standalone infrastructure manifest. Do not deploy that later separation until the successful transition release and its stored manifest have been verified.
 
 ### Image Registry
 
