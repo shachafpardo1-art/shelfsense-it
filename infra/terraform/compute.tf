@@ -42,3 +42,18 @@ resource "aws_instance" "shelfsense_server" {
     Name = "${var.project_name}-${var.environment}-server"
   }
 }
+
+resource "aws_eip" "shelfsense_server" {
+  domain = "vpc"
+
+  tags = {
+    Name = "${var.project_name}-${var.environment}-server-eip"
+  }
+}
+
+resource "aws_eip_association" "shelfsense_server" {
+  allocation_id = aws_eip.shelfsense_server.id
+  instance_id   = aws_instance.shelfsense_server.id
+
+  depends_on = [aws_internet_gateway.main]
+}

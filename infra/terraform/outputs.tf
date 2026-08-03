@@ -29,8 +29,8 @@ output "ec2_instance_id" {
 }
 
 output "ec2_public_ip" {
-  description = "Public IPv4 address of the ShelfSense EC2 instance."
-  value       = aws_instance.shelfsense_server.public_ip
+  description = "Stable Elastic IPv4 address associated with the ShelfSense EC2 instance."
+  value       = aws_eip.shelfsense_server.public_ip
 }
 
 output "ec2_public_dns" {
@@ -40,7 +40,7 @@ output "ec2_public_dns" {
 
 output "ssh_command" {
   description = "Example SSH command for connecting to the ShelfSense server."
-  value       = "ssh -i <PRIVATE_KEY_PATH> ubuntu@${aws_instance.shelfsense_server.public_ip}"
+  value       = "ssh -i <PRIVATE_KEY_PATH> ubuntu@${aws_eip.shelfsense_server.public_ip}"
 }
 
 output "persistent_postgres_volume_id" {
