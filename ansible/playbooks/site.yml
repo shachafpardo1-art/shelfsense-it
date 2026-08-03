@@ -9,3 +9,5 @@
     - storage
     - k3s
     - helm
+    - docker
+    - jenkins

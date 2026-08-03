@@ -1,0 +1,92 @@
+---
+- name: Ensure APT keyring directory exists for Docker
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Docker repository prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - python3-debian
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Resolve Docker APT architecture
+  ansible.builtin.set_fact:
+    docker_apt_architecture: >-
+      {{ {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(ansible_architecture, '') }}
+
+- name: Assert Docker supports the host architecture and Ubuntu release facts
+  ansible.builtin.assert:
+    that:
+      - docker_apt_architecture | length > 0
+      - ansible_distribution == 'Ubuntu'
+      - ansible_distribution_release | length > 0
+    fail_msg: >-
+      Docker repository configuration requires supported Ubuntu amd64 or arm64 facts;
+      detected {{ ansible_distribution }} {{ ansible_distribution_release }} on {{ ansible_architecture }}.
+
+- name: Download Docker repository signing key
+  ansible.builtin.get_url:
+    url: "{{ docker_apt_key_url }}"
+    dest: "{{ docker_apt_key_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure Docker official Ubuntu APT repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    types:
+      - deb
+    uris:
+      - "{{ docker_apt_repository_url }}"
+    suites:
+      - "{{ ansible_distribution_release }}"
+    components:
+      - stable
+    architectures:
+      - "{{ docker_apt_architecture }}"
+    signed_by: "{{ docker_apt_key_path }}"
+    state: present
+    enabled: true
+  register: docker_repository
+
+- name: Refresh APT cache after Docker repository changes
+  ansible.builtin.apt:
+    update_cache: true
+  when: docker_repository.changed
+
+- name: Install Docker Engine and build tooling
+  ansible.builtin.apt:
+    name: "{{ docker_packages }}"
+    state: present
+
+- name: Ensure Docker service is enabled and started
+  ansible.builtin.service:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Verify Docker Engine version
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/docker
+      - version
+      - --format
+      - "{{ '{{ .Server.Version }}' }}"
+  register: docker_version_check
+  changed_when: false
+
+- name: Assert Docker Engine version was reported
+  ansible.builtin.assert:
+    that:
+      - docker_version_check.stdout | trim | length > 0
+    fail_msg: Docker Engine did not report a server version.
