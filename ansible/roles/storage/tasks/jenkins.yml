@@ -556,12 +556,45 @@
     fail_msg: Jenkins became active while its retained filesystem was unmounted; refusing to mount over the running service.
   when: persistent_jenkins_active_mount.rc == 1
 
+- name: Check whether the Jenkins package account exists
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/getent
+      - passwd
+      - jenkins
+  register: persistent_jenkins_user_lookup
+  changed_when: false
+  failed_when: persistent_jenkins_user_lookup.rc not in [0, 2]
+
+- name: Check whether the Jenkins package group exists
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/getent
+      - group
+      - jenkins
+  register: persistent_jenkins_group_lookup
+  changed_when: false
+  failed_when: persistent_jenkins_group_lookup.rc not in [0, 2]
+
+- name: Require consistent Jenkins package account state
+  ansible.builtin.assert:
+    that:
+      - persistent_jenkins_user_lookup.rc == persistent_jenkins_group_lookup.rc
+    fail_msg: The Jenkins package account and primary group must either both exist or both be absent.
+
+- name: Select safe Jenkins mount ownership
+  ansible.builtin.set_fact:
+    persistent_jenkins_effective_owner: >-
+      {{ 'jenkins' if persistent_jenkins_user_lookup.rc == 0 else persistent_jenkins_owner }}
+    persistent_jenkins_effective_group: >-
+      {{ 'jenkins' if persistent_jenkins_group_lookup.rc == 0 else persistent_jenkins_group }}
+
 - name: Ensure the validated Jenkins mountpoint directory exists
   ansible.builtin.file:
     path: "{{ persistent_jenkins_mount_path }}"
     state: directory
-    owner: root
-    group: root
+    owner: "{{ persistent_jenkins_effective_owner }}"
+    group: "{{ persistent_jenkins_effective_group }}"
     mode: "{{ persistent_jenkins_mode }}"
 
 - name: Build the Jenkins fstab entry
@@ -626,21 +659,10 @@
         ]
     fail_msg: Jenkins storage mount verification failed.
 
-- name: Check whether the Jenkins package account exists
-  ansible.builtin.command:
-    argv:
-      - /usr/bin/getent
-      - passwd
-      - jenkins
-  register: persistent_jenkins_user_lookup
-  changed_when: false
-  failed_when: persistent_jenkins_user_lookup.rc not in [0, 2]
-
-- name: Prepare the mounted Jenkins directory with temporary root ownership
+- name: Prepare the mounted Jenkins directory with account-aware ownership
   ansible.builtin.file:
     path: "{{ persistent_jenkins_mount_path }}"
     state: directory
-    owner: "{{ persistent_jenkins_owner }}"
-    group: "{{ persistent_jenkins_group }}"
+    owner: "{{ persistent_jenkins_effective_owner }}"
+    group: "{{ persistent_jenkins_effective_group }}"
     mode: "{{ persistent_jenkins_mode }}"
-  when: persistent_jenkins_user_lookup.rc == 2

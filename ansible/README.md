@@ -8,8 +8,24 @@ This directory contains the server-configuration layer for ShelfSense IT. The fl
 - `storage`: resolves the retained PostgreSQL and optional Jenkins EBS volumes by Nitro by-id metadata, safely creates ext4 only on explicitly authorized signature-free new volumes, and mounts them by UUID.
 - `k3s`: installs K3s, waits for the Kubernetes API and node readiness, and prepares `kubectl` access for the `ubuntu` user.
 - `helm`: installs the Helm CLI so the existing Helm chart can be used later to deploy ShelfSense.
+- `docker`: installs Docker Engine and CI image-build tooling from Docker's official Ubuntu repository without replacing or reconfiguring K3s containerd.
+- `jenkins`: installs Jenkins LTS as a systemd service with Java 21, loopback-only access, Docker group membership, and a conservative 1 GiB JVM heap ceiling.
 
-K3s provides the Kubernetes runtime and uses `containerd`, so Docker Engine is not installed on the EC2 server. Docker Compose remains the local-development deployment method only. Container images are built separately, pushed to the registry, and later pulled by Kubernetes when workloads are deployed.
+K3s continues to use its own bundled `containerd` runtime. Docker Engine is installed separately for Jenkins CI image builds and does not replace or configure the K3s runtime. Jenkins runs as the non-root `jenkins` system user, while membership in the `docker` group grants effectively privileged access to the Docker daemon. This is an accepted trade-off for the trusted single-node CI environment.
+
+Jenkins listens only on `127.0.0.1:8080` and is initially accessed through an SSH tunnel. Port 8080 must not be exposed publicly. The role limits the Jenkins JVM heap to 1 GiB because Jenkins shares the roughly 8 GiB host with K3s and monitoring.
+
+The Jenkins setup wizard, initial administrator, plugins, credentials, jobs, webhook, RBAC, Jenkinsfile, reverse proxy, TLS, and deployment automation are later milestones. The role does not read or expose the initial administrator password and does not bypass setup security.
+
+Jenkins executor count is stored in controller application configuration. To avoid pre-seeding security-sensitive controller state, the role does not modify it before initialization. After completing the setup wizard, set **Manage Jenkins → Nodes → Built-In Node → Configure → Number of executors** to `1`. Validate without printing controller configuration or secrets:
+
+```bash
+ansible production -b -m shell -a "grep -Eq '<numExecutors>1</numExecutors>' /var/lib/jenkins/config.xml"
+```
+
+CI risk controls are one trusted repository, one executor, no direct public port 8080, and credentials stored in Jenkins Credentials rather than Git. Untrusted pull-request code must never receive deployment or registry credentials.
+
+Jenkins controller state lives on the dedicated encrypted retained EBS filesystem mounted at `/var/lib/jenkins`. Pipeline definitions and infrastructure configuration remain reproducible from Git and Ansible, while plugins, credentials, controller configuration, and build history persist across EC2 replacement when the same volume is reattached. Persistent storage is not a backup; independent backups and isolated ephemeral build agents remain future improvements.
 
 ## Inventory
 
@@ -31,17 +47,21 @@ The authorization flag is never a substitute for the device checks: immediately 
 
 Jenkins controller state uses its own encrypted retained EBS volume mounted at `/var/lib/jenkins`. The committed `persistent_jenkins_volume_id: ""` default skips this optional workflow, and `jenkins_storage_allow_initial_format: false` refuses to initialize a blank volume. For a reviewed new, signature-free Jenkins volume, authorize formatting exactly once with `--extra-vars '{"jenkins_storage_allow_initial_format": true}'`, then return to the default. Existing filesystems are never formatted.
 
-The storage role refuses to mount over an active Jenkins service or a non-empty unmounted `/var/lib/jenkins` directory. During this milestone it prepares the mounted filesystem as `root:root`; Jenkins is not installed or started. The later Jenkins role must install the package, change the mounted directory to `jenkins:jenkins`, and only then start Jenkins for the first time.
+The storage role refuses to mount over an active Jenkins service or a non-empty unmounted `/var/lib/jenkins` directory. It initially prepares the mounted filesystem as `root:root`. The Jenkins role installs the package with service startup blocked, verifies the exact retained filesystem, recursively changes the mounted controller directory to `jenkins:jenkins`, and only then enables and starts Jenkins.
 
 The Jenkins EBS volume belongs to the persistence Terraform state, while the disposable runtime state owns only its attachment. Runtime destroy detaches but does not delete the volume. After EC2 replacement, reattach and validate the retained mount before Jenkins starts. Plugins, credentials, controller configuration, and build history survive when the same volume is reattached, but retained storage is not a backup and explicit EBS deletion remains a separate destructive operation.
 
-The `/var/lib/jenkins` fstab entry uses `nofail`, so an unavailable Jenkins data disk does not block the entire EC2 host—and therefore K3s—from booting. This boot-safety choice must not allow Jenkins to fall back to the root volume. Before Jenkins is ever enabled or started, the later Jenkins systemd role must add `RequiresMountsFor=/var/lib/jenkins`, verify that the expected UUID-backed filesystem is mounted there, and assign `jenkins:jenkins` ownership. If that retained mount is unavailable or does not match the expected filesystem, Jenkins must remain stopped rather than write controller state to the disposable EC2 root volume.
+The `/var/lib/jenkins` fstab entry uses `nofail`, so an unavailable Jenkins data disk does not block the entire EC2 host—and therefore K3s—from booting. This boot-safety choice does not allow Jenkins to fall back to the root volume. The Jenkins systemd override adds `RequiresMountsFor=/var/lib/jenkins`, and Ansible independently verifies the exact Nitro EBS mapping, ext4 type, filesystem UUID, mount source, and separation from the EC2 root filesystem before startup. If that retained mount is unavailable or mismatched, the play fails while Jenkins remains stopped and disabled.
+
+Docker group membership gives the trusted Jenkins controller effectively root-level host access. It is accepted only for this single trusted CI controller; neither Docker nor Jenkins is exposed publicly.
 
 Project-wide variables live in `inventory/group_vars/all.yml`, including the deployment user, timezone, shared base package list, and pinned K3s and Helm versions:
 
 - `k3s_version: v1.34.8+k3s1`
 - `helm_version: v3.19.0`
 - `helm_archive_checksums` for the pinned Linux `amd64` and `arm64` release archives
+- Docker official repository metadata and package list
+- Jenkins LTS repository metadata, loopback listener, executor target, and JVM heap options
 
 If K3s is already present at the pinned version, repeated runs skip installation. If a different K3s version is already installed, the role fails clearly instead of upgrading or downgrading. Helm is reinstalled only when absent or when another version is detected.
 
@@ -58,6 +78,8 @@ ansible-playbook --check playbooks/site.yml
 ansible-playbook playbooks/site.yml
 ansible production -m command -a "sudo /usr/local/bin/k3s kubectl get nodes -o wide"
 ansible production -m command -a "/usr/local/bin/helm version --short"
+ansible production -b -m command -a "docker version"
+ssh -L 8080:127.0.0.1:8080 ubuntu@your-production-host.example.com
 ```
 
 Check mode is useful for basic validation, but installation tasks that depend on remote system state or downloaded artifacts are not fully meaningful in `--check`.

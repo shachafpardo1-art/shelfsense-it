@@ -1,0 +1,423 @@
+---
+- name: Assert Jenkins foundation and retained-storage policy
+  ansible.builtin.assert:
+    that:
+      - jenkins_bind_address == '127.0.0.1'
+      - jenkins_port | int == 8080
+      - jenkins_executor_target | int == 1
+      - persistent_jenkins_volume_id is match('^vol-[0-9a-f]{8,17}$')
+      - persistent_jenkins_mount_path == '/var/lib/jenkins'
+      - persistent_jenkins_filesystem == 'ext4'
+    fail_msg: Jenkins requires a valid retained volume, loopback-only port 8080, and a one-executor target.
+
+- name: Ensure APT keyring directory exists for Jenkins
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install Jenkins runtime prerequisites
+  ansible.builtin.apt:
+    name: "{{ jenkins_runtime_packages + ['ca-certificates', 'python3-debian'] }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Download Jenkins 2026 repository signing key
+  ansible.builtin.get_url:
+    url: "{{ jenkins_apt_key_url }}"
+    dest: "{{ jenkins_apt_key_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure Jenkins LTS APT repository
+  ansible.builtin.deb822_repository:
+    name: jenkins
+    types:
+      - deb
+    uris:
+      - "{{ jenkins_apt_repository_url }}"
+    suites:
+      - binary/
+    signed_by: "{{ jenkins_apt_key_path }}"
+    state: present
+    enabled: true
+  register: jenkins_repository
+
+- name: Refresh APT cache after Jenkins repository changes
+  ansible.builtin.apt:
+    update_cache: true
+  when: jenkins_repository.changed
+
+- name: Install Jenkins package without starting it
+  ansible.builtin.apt:
+    name: "{{ jenkins_package_name }}"
+    state: present
+    policy_rc_d: 101
+  register: jenkins_package_install
+
+- name: Keep Jenkins stopped and disabled until storage validation completes
+  ansible.builtin.systemd:
+    name: jenkins
+    enabled: false
+    state: stopped
+  when: jenkins_package_install.changed
+
+- name: Confirm the Jenkins package account exists
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/getent
+      - passwd
+      - jenkins
+  register: jenkins_account_check
+  changed_when: false
+
+- name: Confirm the Jenkins package group exists
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/getent
+      - group
+      - jenkins
+  register: jenkins_primary_group_check
+  changed_when: false
+
+- name: Assert the Jenkins package created its account and group
+  ansible.builtin.assert:
+    that:
+      - jenkins_account_check.stdout | trim | length > 0
+      - jenkins_primary_group_check.stdout | trim | length > 0
+    fail_msg: The Jenkins package did not create the required jenkins account and group.
+
+- name: Build the expected Jenkins Nitro EBS by-id path
+  ansible.builtin.set_fact:
+    jenkins_expected_by_id_path: >-
+      /dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_{{ persistent_jenkins_volume_id | replace('-', '') }}
+
+- name: Wait for the exact retained Jenkins EBS mapping
+  ansible.builtin.wait_for:
+    path: "{{ jenkins_expected_by_id_path }}"
+    state: present
+    timeout: 120
+
+- name: Resolve the exact retained Jenkins NVMe device
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/readlink
+      - -f
+      - "{{ jenkins_expected_by_id_path }}"
+  register: jenkins_expected_device
+  changed_when: false
+
+- name: Assert the retained Jenkins mapping is an unpartitioned Nitro device
+  ansible.builtin.assert:
+    that:
+      - jenkins_expected_device.stdout_lines | length == 1
+      - jenkins_expected_device.stdout is match('^/dev/nvme[0-9]+n[0-9]+$')
+    fail_msg: The retained Jenkins EBS ID did not resolve unambiguously to a Nitro NVMe device.
+
+- name: Confirm the retained Jenkins device is a block device
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/test
+      - -b
+      - "{{ jenkins_expected_device.stdout }}"
+  changed_when: false
+
+- name: Inspect the retained Jenkins device topology
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/lsblk
+      - --noheadings
+      - --raw
+      - --paths
+      - --output
+      - NAME,TYPE
+      - "{{ jenkins_expected_device.stdout }}"
+  register: jenkins_expected_topology
+  changed_when: false
+
+- name: Assert the retained Jenkins device has no partitions
+  ansible.builtin.assert:
+    that:
+      - jenkins_expected_topology.stdout_lines | length == 1
+      - jenkins_expected_topology.stdout_lines[0].split()[-1] == 'disk'
+    fail_msg: The retained Jenkins device is partitioned or has ambiguous topology.
+
+- name: Read the exact retained Jenkins filesystem type
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - -s
+      - TYPE
+      - -o
+      - value
+      - "{{ jenkins_expected_device.stdout }}"
+  register: jenkins_expected_filesystem
+  changed_when: false
+
+- name: Read the exact retained Jenkins filesystem UUID
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - -s
+      - UUID
+      - -o
+      - value
+      - "{{ jenkins_expected_device.stdout }}"
+  register: jenkins_expected_uuid
+  changed_when: false
+
+- name: Inspect the Jenkins mountpoint without following an unmounted directory
+  ansible.builtin.stat:
+    path: "{{ persistent_jenkins_mount_path }}"
+    follow: false
+  register: jenkins_mountpoint_stat
+
+- name: Confirm the Jenkins path is a real mountpoint
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/mountpoint
+      - --quiet
+      - "{{ persistent_jenkins_mount_path }}"
+  changed_when: false
+
+- name: Read the mounted Jenkins filesystem identity
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --evaluate
+      - --output
+      - SOURCE,UUID,FSTYPE,TARGET
+      - --mountpoint
+      - "{{ persistent_jenkins_mount_path }}"
+  register: jenkins_mounted_filesystem
+  changed_when: false
+
+- name: Read the EC2 root filesystem identity
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --evaluate
+      - --output
+      - SOURCE,UUID,FSTYPE,TARGET
+      - --target
+      - /
+  register: jenkins_root_filesystem
+  changed_when: false
+
+- name: Assert the exact retained Jenkins filesystem is mounted
+  ansible.builtin.assert:
+    that:
+      - jenkins_mountpoint_stat.stat.exists
+      - jenkins_mountpoint_stat.stat.isdir
+      - not jenkins_mountpoint_stat.stat.islnk
+      - jenkins_expected_filesystem.stdout | trim == persistent_jenkins_filesystem
+      - jenkins_expected_uuid.stdout | trim | length > 0
+      - jenkins_mounted_filesystem.stdout_lines | length == 1
+      - >-
+        jenkins_mounted_filesystem.stdout.split() ==
+        [
+          jenkins_expected_device.stdout,
+          (jenkins_expected_uuid.stdout | trim),
+          persistent_jenkins_filesystem,
+          persistent_jenkins_mount_path
+        ]
+      - jenkins_root_filesystem.stdout_lines | length == 1
+      - jenkins_mounted_filesystem.stdout.split()[0] != jenkins_root_filesystem.stdout.split()[0]
+      - jenkins_mounted_filesystem.stdout.split()[1] != jenkins_root_filesystem.stdout.split()[1]
+    fail_msg: Jenkins storage is absent, mismatched, or backed by the EC2 root filesystem; Jenkins will remain stopped.
+
+- name: Inspect current Jenkins mount root ownership
+  ansible.builtin.stat:
+    path: "{{ persistent_jenkins_mount_path }}"
+    follow: false
+  register: jenkins_mount_ownership
+
+- name: Recursively assign retained Jenkins state to the package account
+  ansible.builtin.file:
+    path: "{{ persistent_jenkins_mount_path }}"
+    state: directory
+    owner: jenkins
+    group: jenkins
+    recurse: true
+  when: >-
+    jenkins_package_install.changed or
+    (jenkins_mount_ownership.stat.pw_name | default('')) != 'jenkins' or
+    (jenkins_mount_ownership.stat.gr_name | default('')) != 'jenkins'
+
+- name: Preserve restrictive mode on the Jenkins mount root
+  ansible.builtin.file:
+    path: "{{ persistent_jenkins_mount_path }}"
+    state: directory
+    owner: jenkins
+    group: jenkins
+    mode: "0750"
+
+- name: Add Jenkins service account to Docker group
+  ansible.builtin.user:
+    name: jenkins
+    groups:
+      - docker
+    append: true
+
+- name: Ensure Jenkins systemd override directory exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/jenkins.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure Jenkins mount dependency, loopback listener, and JVM heap
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/jenkins.service.d/override.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      [Unit]
+      RequiresMountsFor={{ persistent_jenkins_mount_path }}
+
+      [Service]
+      Environment="JENKINS_PORT={{ jenkins_port }}"
+      Environment="JENKINS_OPTS=--httpListenAddress={{ jenkins_bind_address }}"
+      Environment="JAVA_OPTS={{ jenkins_java_options }}"
+
+- name: Reload systemd after installing Jenkins override
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Re-resolve the retained Jenkins device immediately before startup
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/readlink
+      - -f
+      - "{{ jenkins_expected_by_id_path }}"
+  register: jenkins_prestart_device
+  changed_when: false
+
+- name: Re-read the retained Jenkins filesystem UUID before startup
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - -s
+      - UUID
+      - -o
+      - value
+      - "{{ jenkins_prestart_device.stdout }}"
+  register: jenkins_prestart_uuid
+  changed_when: false
+
+- name: Reconfirm the Jenkins path is mounted before startup
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/mountpoint
+      - --quiet
+      - "{{ persistent_jenkins_mount_path }}"
+  changed_when: false
+
+- name: Re-read the mounted Jenkins filesystem immediately before startup
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --evaluate
+      - --output
+      - SOURCE,UUID,FSTYPE,TARGET
+      - --mountpoint
+      - "{{ persistent_jenkins_mount_path }}"
+  register: jenkins_prestart_mount
+  changed_when: false
+
+- name: Assert retained Jenkins storage remained stable before startup
+  ansible.builtin.assert:
+    that:
+      - jenkins_prestart_device.stdout_lines | length == 1
+      - jenkins_prestart_device.stdout == jenkins_expected_device.stdout
+      - (jenkins_prestart_uuid.stdout | trim) == (jenkins_expected_uuid.stdout | trim)
+      - >-
+        jenkins_prestart_mount.stdout.split() ==
+        [
+          jenkins_expected_device.stdout,
+          (jenkins_expected_uuid.stdout | trim),
+          persistent_jenkins_filesystem,
+          persistent_jenkins_mount_path
+        ]
+    fail_msg: Retained Jenkins storage changed before service startup; Jenkins will remain stopped.
+
+- name: Read Java version
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/java
+      - -version
+  register: java_version_check
+  changed_when: false
+
+- name: Confirm Java major version 21 is active
+  ansible.builtin.assert:
+    that:
+      - (java_version_check.stdout ~ java_version_check.stderr) is regex('.*version "21(\\.|"?).*')
+    fail_msg: Jenkins requires Java major version 21.
+
+- name: Enable and start Jenkins after all storage guards pass
+  ansible.builtin.systemd:
+    name: jenkins
+    enabled: true
+    state: started
+
+- name: Wait for Jenkins loopback listener
+  ansible.builtin.wait_for:
+    host: "{{ jenkins_bind_address }}"
+    port: "{{ jenkins_port }}"
+    state: started
+    timeout: 180
+
+- name: Verify Jenkins service is active
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/systemctl
+      - is-active
+      - jenkins
+  register: jenkins_service_check
+  changed_when: false
+
+- name: Read Jenkins group membership
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/id
+      - -nG
+      - jenkins
+  register: jenkins_group_check
+  changed_when: false
+
+- name: Read Jenkins TCP listeners
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/ss
+      - -H
+      - -ltn
+      - "sport = :{{ jenkins_port }}"
+  register: jenkins_listener_check
+  changed_when: false
+
+- name: Assert Jenkins service, Docker access, and loopback-only listener
+  ansible.builtin.assert:
+    that:
+      - jenkins_service_check.stdout | trim == 'active'
+      - "'docker' in jenkins_group_check.stdout.split()"
+      - jenkins_listener_check.stdout_lines | length == 1
+      - >-
+        (jenkins_bind_address ~ ':' ~ (jenkins_port | string)) in jenkins_listener_check.stdout
+        or
+        ('[::ffff:' ~ jenkins_bind_address ~ ']:' ~ (jenkins_port | string)) in jenkins_listener_check.stdout
+      - "('0.0.0.0:' ~ (jenkins_port | string)) not in jenkins_listener_check.stdout"
+      - "('[::]:' ~ (jenkins_port | string)) not in jenkins_listener_check.stdout"
+    fail_msg: Jenkins must be active, in the Docker group, and bound only to the configured loopback endpoint.

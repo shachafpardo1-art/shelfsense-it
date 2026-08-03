@@ -14,6 +14,27 @@ helm_version: v3.19.0
 helm_archive_checksums:
   amd64: a7f81ce08007091b86d8bd696eb4d86b8d0f2e1b9f6c714be62f82f96a594496
   arm64: 440cf7add0aee27ebc93fada965523c1dc2e0ab340d4348da2215737fc0d76ad
+docker_apt_key_url: https://download.docker.com/linux/ubuntu/gpg
+docker_apt_key_path: /etc/apt/keyrings/docker.asc
+docker_apt_repository_url: https://download.docker.com/linux/ubuntu
+docker_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+jenkins_apt_key_url: https://pkg.jenkins.io/debian-stable/jenkins.io-2026.key
+jenkins_apt_key_path: /etc/apt/keyrings/jenkins-keyring.asc
+jenkins_apt_repository_url: https://pkg.jenkins.io/debian-stable
+jenkins_runtime_packages:
+  - fontconfig
+  - iproute2
+  - openjdk-21-jre
+jenkins_package_name: jenkins
+jenkins_bind_address: 127.0.0.1
+jenkins_port: 8080
+jenkins_executor_target: 1
+jenkins_java_options: -Djava.awt.headless=true -Xms256m -Xmx1024m
 swap_file_path: /swapfile
 swap_file_size: 2G
 persistent_postgres_volume_id: ""
