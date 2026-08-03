@@ -10,7 +10,7 @@ The current validated baseline uses Terraform to provision AWS infrastructure an
 
 Docker Compose remains a local development workflow only. AWS runtime validation is based on K3s with `containerd`, with application images stored in Docker Hub.
 
-The compute/network runtime remains temporary. PostgreSQL data now has a separate long-lived lifecycle on a retained EBS volume.
+The compute/network runtime remains temporary. PostgreSQL data and Jenkins controller state have separate long-lived lifecycles on dedicated retained EBS volumes.
 
 ---
 
@@ -29,9 +29,10 @@ The compute/network runtime remains temporary. PostgreSQL data now has a separat
                      |
                Ubuntu EC2 Instance
                      |
-          Retained EBS volume attachment
-                     |
-       /srv/shelfsense/postgres (ext4, UUID)
+       Retained EBS volume attachments
+              |               |
+  /srv/shelfsense/postgres  /var/lib/jenkins
+         (ext4, UUID)         (ext4, UUID)
                      |
           K3s v1.34.8+k3s1 (containerd)
                      |
@@ -50,9 +51,9 @@ Terraform creates the AWS infrastructure baseline:
 - Route table
 - Security group
 - EC2 instance
-- attachment to an existing persistent PostgreSQL EBS volume
+- attachments to existing persistent PostgreSQL and Jenkins EBS volumes
 
-The EBS volume itself is created by the independent `infra/persistence` Terraform root and is never declared in the disposable runtime state. Both roots must use the same Availability Zone.
+The EBS volumes are created by the independent `infra/persistence` Terraform root and are never declared in the disposable runtime state. Both Terraform roots use the same Availability Zone. Runtime destroy removes the attachments and disposable EC2 resources but retains both persistence volumes.
 
 ### Ansible
 
@@ -64,6 +65,9 @@ Ansible configures the Ubuntu server after Terraform creates it. The validated r
 - Helm `v3.19.0`
 - kubeconfig setup for cluster access
 - safe Nitro EBS discovery, first-use ext4 creation, UUID-based fstab entry, and mount at `/srv/shelfsense/postgres`
+- safe Nitro EBS discovery, guarded first-use ext4 creation, UUID-based fstab entry, and mount at `/var/lib/jenkins` when a Jenkins volume ID is supplied
+
+Jenkins storage is prepared as `root:root` because the package-created `jenkins` user does not exist during this milestone. The later Jenkins role must set `jenkins:jenkins` ownership after package installation and before the first service start. Jenkins must never start before the retained mount is verified.
 
 ### Kubernetes Runtime
 
@@ -95,7 +99,15 @@ Normal destroy order:
 2. `infra/terraform` destroy
 3. Keep `infra/persistence`; do not destroy it during normal operation
 
-The data survives Pod recreation, Helm upgrades, EC2 replacement, and disposable runtime destroy/apply cycles. It does not survive explicit persistence destruction, volume corruption, or database-level deletion. The retained volume is not a backup; S3 or database-native backups remain a future resilience layer.
+PostgreSQL data and Jenkins plugins, credentials, controller configuration, and build history survive EC2 replacement and disposable runtime destroy/apply cycles when their respective volumes are reattached and remounted. First-time formatting requires explicit authorization and is permitted only for a verified signature-free new volume. Explicit PV or EBS deletion requires a separate destructive decision. Persistent storage is not a backup; independent backups remain a future resilience layer.
+
+### Jenkins controller storage lifecycle
+
+The dedicated encrypted 10 GiB `gp3` Jenkins EBS volume is persistence-managed and mounted at `/var/lib/jenkins`. The runtime Terraform state owns only `aws_volume_attachment.jenkins_data`. After runtime recreation, attach the retained volume, run the guarded Ansible mount workflow, verify the UUID-backed mount, install Jenkins if needed, set final `jenkins:jenkins` ownership, and only then start the service.
+
+A blank Jenkins volume is not formatted by default. An operator must verify the exact EBS identity and explicitly authorize the one-time format; any existing filesystem or ambiguous signature causes a safe failure. Destroying the runtime detaches the volume but does not delete it. Destroying the Jenkins EBS volume remains an explicit persistence-root action and requires a reviewed data-destruction decision.
+
+The `/var/lib/jenkins` fstab entry includes `nofail`, allowing the EC2/K3s host to boot even when the Jenkins data volume is absent. Jenkins must not treat that condition as permission to use the root disk. Before the service is ever enabled or started, the later Jenkins systemd role must configure `RequiresMountsFor=/var/lib/jenkins`, verify the expected UUID-backed mount, and set `jenkins:jenkins` ownership. A missing or mismatched retained mount must keep Jenkins stopped so controller state cannot be written to the disposable EC2 root volume.
 
 ### Kubernetes metadata lifecycle and recovery
 

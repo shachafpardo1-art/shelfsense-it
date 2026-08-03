@@ -25,3 +25,12 @@ persistent_postgres_owner: "999"
 persistent_postgres_group: "999"
 persistent_postgres_mode: "0750"
 postgres_storage_allow_initial_format: false
+persistent_jenkins_volume_id: ""
+persistent_jenkins_attachment_device_name: /dev/sdg
+persistent_jenkins_mount_path: /var/lib/jenkins
+persistent_jenkins_filesystem: ext4
+persistent_jenkins_mount_options: defaults,nofail
+persistent_jenkins_owner: root
+persistent_jenkins_group: root
+persistent_jenkins_mode: "0750"
+jenkins_storage_allow_initial_format: false

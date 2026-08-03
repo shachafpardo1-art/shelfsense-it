@@ -1,0 +1,646 @@
+---
+- name: Validate persistent Jenkins storage inputs
+  ansible.builtin.assert:
+    that:
+      - persistent_jenkins_volume_id is match('^vol-[0-9a-f]{8,17}$')
+      - persistent_jenkins_volume_id != persistent_postgres_volume_id
+      - persistent_jenkins_attachment_device_name is match('^/dev/sd[f-p]$')
+      - persistent_jenkins_attachment_device_name != persistent_ebs_attachment_device_name
+      - persistent_jenkins_mount_path == '/var/lib/jenkins'
+      - persistent_jenkins_filesystem == 'ext4'
+      - persistent_jenkins_owner == 'root'
+      - persistent_jenkins_group == 'root'
+      - jenkins_storage_allow_initial_format is boolean
+    fail_msg: Persistent Jenkins storage inputs are missing, invalid, or collide with PostgreSQL storage.
+
+- name: Build the Jenkins Nitro EBS by-id path
+  ansible.builtin.set_fact:
+    persistent_jenkins_by_id_path: >-
+      /dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_{{ persistent_jenkins_volume_id | replace('-', '') }}
+
+- name: Wait for the exact Jenkins EBS volume to appear
+  ansible.builtin.wait_for:
+    path: "{{ persistent_jenkins_by_id_path }}"
+    state: present
+    timeout: 120
+
+- name: Resolve the Jenkins EBS NVMe block device
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/readlink
+      - -f
+      - "{{ persistent_jenkins_by_id_path }}"
+  register: persistent_jenkins_device
+  changed_when: false
+
+- name: Validate the resolved Jenkins Nitro block device
+  ansible.builtin.assert:
+    that:
+      - persistent_jenkins_device.stdout_lines | length == 1
+      - persistent_jenkins_device.stdout is match('^/dev/nvme[0-9]+n[0-9]+$')
+      - persistent_jenkins_device.stdout != persistent_postgres_device.stdout
+    fail_msg: The Jenkins EBS volume ID did not resolve unambiguously to a distinct unpartitioned Nitro NVMe device.
+
+- name: Confirm the resolved Jenkins path is a block device
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/test
+      - -b
+      - "{{ persistent_jenkins_device.stdout }}"
+  changed_when: false
+
+- name: Inspect the Jenkins device topology
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/lsblk
+      - --noheadings
+      - --raw
+      - --paths
+      - --output
+      - NAME,TYPE
+      - "{{ persistent_jenkins_device.stdout }}"
+  register: persistent_jenkins_topology
+  changed_when: false
+
+- name: Refuse partitioned or ambiguous Jenkins devices
+  ansible.builtin.assert:
+    that:
+      - persistent_jenkins_topology.stdout_lines | length == 1
+      - persistent_jenkins_topology.stdout_lines[0].split()[-1] == 'disk'
+    fail_msg: The Jenkins EBS device contains partitions or has an ambiguous topology; refusing to format or mount it.
+
+- name: Discover the root filesystem source for Jenkins safety checks
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --output
+      - SOURCE
+      - --target
+      - /
+  register: persistent_jenkins_root_source
+  changed_when: false
+
+- name: Resolve the root filesystem source for Jenkins safety checks
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/readlink
+      - -f
+      - "{{ persistent_jenkins_root_source.stdout }}"
+  register: persistent_jenkins_root_source_realpath
+  changed_when: false
+
+- name: Discover the root filesystem parent disk for Jenkins safety checks
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/lsblk
+      - --noheadings
+      - --raw
+      - --output
+      - PKNAME
+      - "{{ persistent_jenkins_root_source_realpath.stdout }}"
+  register: persistent_jenkins_root_parent
+  changed_when: false
+
+- name: Select the root backing disk for Jenkins safety checks
+  ansible.builtin.set_fact:
+    persistent_jenkins_root_disk: >-
+      {{ '/dev/' ~ (persistent_jenkins_root_parent.stdout | trim)
+         if persistent_jenkins_root_parent.stdout | trim | length > 0
+         else persistent_jenkins_root_source_realpath.stdout }}
+
+- name: Inspect the complete root block-device tree for Jenkins safety checks
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/lsblk
+      - --noheadings
+      - --raw
+      - --paths
+      - --output
+      - NAME
+      - "{{ persistent_jenkins_root_disk }}"
+  register: persistent_jenkins_root_block_devices
+  changed_when: false
+
+- name: Refuse the root disk or any root parent or child device for Jenkins
+  ansible.builtin.assert:
+    that:
+      - persistent_jenkins_device.stdout not in persistent_jenkins_root_block_devices.stdout_lines
+    fail_msg: The Jenkins EBS mapping overlaps the root block-device tree; refusing all storage changes.
+
+- name: Detect an existing filesystem on the Jenkins device
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - -p
+      - -s
+      - TYPE
+      - -o
+      - value
+      - "{{ persistent_jenkins_device.stdout }}"
+  register: persistent_jenkins_filesystem_probe
+  changed_when: false
+  failed_when: persistent_jenkins_filesystem_probe.rc not in [0, 2]
+
+- name: Inspect all Jenkins-device signatures without modifying them
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/wipefs
+      - --noheadings
+      - --output
+      - TYPE
+      - "{{ persistent_jenkins_device.stdout }}"
+  register: persistent_jenkins_signature_probe
+  changed_when: false
+
+- name: Validate Jenkins filesystem detection before any formatting
+  ansible.builtin.assert:
+    that:
+      - >-
+        persistent_jenkins_filesystem_probe.rc == 2 or
+        persistent_jenkins_filesystem_probe.stdout | trim == persistent_jenkins_filesystem
+      - >-
+        persistent_jenkins_filesystem_probe.rc == 0 or
+        persistent_jenkins_signature_probe.stdout | trim == ''
+    fail_msg: The Jenkins EBS device has an unsupported filesystem or ambiguous signatures; refusing to format it.
+
+- name: Record whether Jenkins first-time formatting is required
+  ansible.builtin.set_fact:
+    persistent_jenkins_needs_initial_format: >-
+      {{ persistent_jenkins_filesystem_probe.rc == 2 and
+         persistent_jenkins_signature_probe.stdout | trim == '' }}
+
+- name: Read the existing Jenkins filesystem UUID
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - -s
+      - UUID
+      - -o
+      - value
+      - "{{ persistent_jenkins_device.stdout }}"
+  register: persistent_jenkins_initial_uuid
+  changed_when: false
+  when: not persistent_jenkins_needs_initial_format
+
+- name: Require a valid existing Jenkins filesystem UUID
+  ansible.builtin.assert:
+    that:
+      - persistent_jenkins_initial_uuid.stdout | trim | length > 0
+    fail_msg: The existing Jenkins filesystem does not have a readable UUID.
+  when: not persistent_jenkins_needs_initial_format
+
+- name: Inspect the Jenkins mountpoint before any host mutation
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --evaluate
+      - --output
+      - SOURCE,UUID,FSTYPE
+      - --mountpoint
+      - "{{ persistent_jenkins_mount_path }}"
+  register: persistent_jenkins_initial_mount
+  changed_when: false
+  failed_when: persistent_jenkins_initial_mount.rc not in [0, 1]
+
+- name: Refuse a foreign filesystem at the Jenkins mountpoint
+  ansible.builtin.assert:
+    that:
+      - >-
+        persistent_jenkins_initial_mount.rc == 1 or
+        (
+          not persistent_jenkins_needs_initial_format and
+          persistent_jenkins_initial_mount.stdout.split() ==
+          [
+            persistent_jenkins_device.stdout,
+            (persistent_jenkins_initial_uuid.stdout | default('') | trim),
+            persistent_jenkins_filesystem
+          ]
+        )
+    fail_msg: The Jenkins mountpoint is backed by a different source, UUID, or filesystem; refusing all host mutations.
+
+- name: Check whether Jenkins service is active before storage mutation
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/systemctl
+      - is-active
+      - jenkins
+  register: persistent_jenkins_service_state
+  changed_when: false
+  failed_when: false
+
+- name: Inspect whether the unmounted Jenkins path already exists
+  ansible.builtin.stat:
+    path: "{{ persistent_jenkins_mount_path }}"
+  register: persistent_jenkins_mount_path_state
+  when: persistent_jenkins_initial_mount.rc == 1
+
+- name: Check the unmounted Jenkins path for existing content
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/find
+      - "{{ persistent_jenkins_mount_path }}"
+      - -mindepth
+      - "1"
+      - -maxdepth
+      - "1"
+      - -print
+      - -quit
+  register: persistent_jenkins_unmounted_content
+  changed_when: false
+  when:
+    - persistent_jenkins_initial_mount.rc == 1
+    - persistent_jenkins_mount_path_state.stat.exists
+
+- name: Refuse to hide active or existing Jenkins state with a new mount
+  ansible.builtin.assert:
+    that:
+      - persistent_jenkins_service_state.rc != 0
+      - >-
+        not persistent_jenkins_mount_path_state.stat.exists or
+        (
+          persistent_jenkins_mount_path_state.stat.isdir and
+          not persistent_jenkins_mount_path_state.stat.islnk and
+          persistent_jenkins_unmounted_content.stdout | default('') | trim == ''
+        )
+    fail_msg: Jenkins is active or its unmounted data directory is non-empty; refusing to format or mount over controller state.
+  when: persistent_jenkins_initial_mount.rc == 1
+
+- name: Require explicit authorization for Jenkins first-time formatting
+  ansible.builtin.fail:
+    msg: >-
+      The exact Jenkins EBS volume is signature-free and requires first-time initialization.
+      Verify that it is the new empty retained Jenkins volume, then rerun once with
+      jenkins_storage_allow_initial_format=true. No formatting was performed.
+  when:
+    - persistent_jenkins_needs_initial_format
+    - not jenkins_storage_allow_initial_format
+
+- name: Resolve the exact Jenkins EBS mapping again immediately before formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/readlink
+      - -f
+      - "{{ persistent_jenkins_by_id_path }}"
+  register: persistent_jenkins_preformat_device
+  changed_when: false
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Refuse a changed or ambiguous Jenkins pre-format EBS mapping
+  ansible.builtin.assert:
+    that:
+      - persistent_jenkins_preformat_device.stdout_lines | length == 1
+      - persistent_jenkins_preformat_device.stdout is match('^/dev/nvme[0-9]+n[0-9]+$')
+      - persistent_jenkins_preformat_device.stdout == persistent_jenkins_device.stdout
+    fail_msg: The Jenkins EBS-to-NVMe mapping changed, disappeared, or became ambiguous; refusing to format a stale device path.
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Reconfirm the Jenkins pre-format path is a block device
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/test
+      - -b
+      - "{{ persistent_jenkins_preformat_device.stdout }}"
+  changed_when: false
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Reinspect the Jenkins pre-format device topology
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/lsblk
+      - --noheadings
+      - --raw
+      - --paths
+      - --output
+      - NAME,TYPE
+      - "{{ persistent_jenkins_preformat_device.stdout }}"
+  register: persistent_jenkins_preformat_topology
+  changed_when: false
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Rediscover the root filesystem source before Jenkins formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --output
+      - SOURCE
+      - --target
+      - /
+  register: persistent_jenkins_preformat_root_source
+  changed_when: false
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Resolve the current root filesystem source before Jenkins formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/readlink
+      - -f
+      - "{{ persistent_jenkins_preformat_root_source.stdout }}"
+  register: persistent_jenkins_preformat_root_source_realpath
+  changed_when: false
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Rediscover the root filesystem parent disk before Jenkins formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/lsblk
+      - --noheadings
+      - --raw
+      - --output
+      - PKNAME
+      - "{{ persistent_jenkins_preformat_root_source_realpath.stdout }}"
+  register: persistent_jenkins_preformat_root_parent
+  changed_when: false
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Select the current root backing disk before Jenkins formatting
+  ansible.builtin.set_fact:
+    persistent_jenkins_preformat_root_disk: >-
+      {{ '/dev/' ~ (persistent_jenkins_preformat_root_parent.stdout | trim)
+         if persistent_jenkins_preformat_root_parent.stdout | trim | length > 0
+         else persistent_jenkins_preformat_root_source_realpath.stdout }}
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Reinspect the root block-device tree before Jenkins formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/lsblk
+      - --noheadings
+      - --raw
+      - --paths
+      - --output
+      - NAME
+      - "{{ persistent_jenkins_preformat_root_disk }}"
+  register: persistent_jenkins_preformat_root_block_devices
+  changed_when: false
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Reprobe the Jenkins filesystem immediately before formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - -p
+      - -s
+      - TYPE
+      - -o
+      - value
+      - "{{ persistent_jenkins_preformat_device.stdout }}"
+  register: persistent_jenkins_preformat_filesystem_probe
+  changed_when: false
+  failed_when: persistent_jenkins_preformat_filesystem_probe.rc not in [0, 2]
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Reinspect Jenkins signatures immediately before formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/wipefs
+      - --noheadings
+      - --output
+      - TYPE
+      - "{{ persistent_jenkins_preformat_device.stdout }}"
+  register: persistent_jenkins_preformat_signature_probe
+  changed_when: false
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Recheck the Jenkins mountpoint immediately before formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --mountpoint
+      - "{{ persistent_jenkins_mount_path }}"
+  register: persistent_jenkins_preformat_mount
+  changed_when: false
+  failed_when: persistent_jenkins_preformat_mount.rc not in [0, 1]
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Recheck Jenkins service state immediately before formatting
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/systemctl
+      - is-active
+      - jenkins
+  register: persistent_jenkins_preformat_service_state
+  changed_when: false
+  failed_when: false
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Authorize only the revalidated empty non-root Jenkins device for formatting
+  ansible.builtin.assert:
+    that:
+      - persistent_jenkins_preformat_topology.stdout_lines | length == 1
+      - persistent_jenkins_preformat_topology.stdout_lines[0].split()[-1] == 'disk'
+      - persistent_jenkins_preformat_device.stdout not in persistent_jenkins_preformat_root_block_devices.stdout_lines
+      - persistent_jenkins_preformat_filesystem_probe.rc == 2
+      - persistent_jenkins_preformat_signature_probe.stdout | trim == ''
+      - persistent_jenkins_preformat_mount.rc == 1
+      - persistent_jenkins_preformat_service_state.rc != 0
+    fail_msg: Jenkins pre-format safety revalidation failed; refusing to initialize the retained EBS volume.
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Create ext4 on the explicitly authorized new Jenkins volume
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/mkfs.ext4
+      - -L
+      - shelfsense-jenkins
+      - "{{ persistent_jenkins_preformat_device.stdout }}"
+  when: persistent_jenkins_needs_initial_format and jenkins_storage_allow_initial_format
+
+- name: Resolve the exact Jenkins EBS mapping after filesystem validation
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/readlink
+      - -f
+      - "{{ persistent_jenkins_by_id_path }}"
+  register: persistent_jenkins_final_device
+  changed_when: false
+
+- name: Require the validated Jenkins EBS mapping to remain stable
+  ansible.builtin.assert:
+    that:
+      - persistent_jenkins_final_device.stdout_lines | length == 1
+      - persistent_jenkins_final_device.stdout == persistent_jenkins_device.stdout
+    fail_msg: The Jenkins EBS-to-NVMe mapping changed after validation; refusing mount or fstab changes.
+
+- name: Read the Jenkins filesystem UUID
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/blkid
+      - -s
+      - UUID
+      - -o
+      - value
+      - "{{ persistent_jenkins_final_device.stdout }}"
+  register: persistent_jenkins_uuid
+  changed_when: false
+
+- name: Require a valid Jenkins filesystem UUID
+  ansible.builtin.assert:
+    that:
+      - persistent_jenkins_uuid.stdout | trim | length > 0
+      - (persistent_jenkins_uuid.stdout | trim) != (persistent_postgres_uuid.stdout | trim)
+    fail_msg: The Jenkins filesystem UUID is missing or collides with PostgreSQL storage.
+
+- name: Recheck the Jenkins mountpoint before directory or fstab changes
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --evaluate
+      - --output
+      - SOURCE,UUID,FSTYPE
+      - --mountpoint
+      - "{{ persistent_jenkins_mount_path }}"
+  register: persistent_jenkins_active_mount
+  changed_when: false
+  failed_when: persistent_jenkins_active_mount.rc not in [0, 1]
+
+- name: Require an empty Jenkins mountpoint or the exact expected filesystem
+  ansible.builtin.assert:
+    that:
+      - >-
+        persistent_jenkins_active_mount.rc == 1 or
+        persistent_jenkins_active_mount.stdout.split() ==
+        [
+          persistent_jenkins_final_device.stdout,
+          (persistent_jenkins_uuid.stdout | trim),
+          persistent_jenkins_filesystem
+        ]
+    fail_msg: The Jenkins mountpoint is backed by a different source, UUID, or filesystem.
+
+- name: Check whether the Jenkins filesystem is mounted elsewhere
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --output
+      - TARGET
+      - --source
+      - "UUID={{ persistent_jenkins_uuid.stdout | trim }}"
+  register: persistent_jenkins_source_mount
+  changed_when: false
+  failed_when: persistent_jenkins_source_mount.rc not in [0, 1]
+
+- name: Refuse the Jenkins filesystem mounted at another path
+  ansible.builtin.assert:
+    that:
+      - >-
+        persistent_jenkins_source_mount.rc == 1 or
+        persistent_jenkins_source_mount.stdout_lines == [persistent_jenkins_mount_path]
+    fail_msg: The Jenkins EBS filesystem is already mounted at an unexpected path.
+
+- name: Recheck Jenkins service state before creating a missing mount
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/systemctl
+      - is-active
+      - jenkins
+  register: persistent_jenkins_premount_service_state
+  changed_when: false
+  failed_when: false
+  when: persistent_jenkins_active_mount.rc == 1
+
+- name: Ensure Jenkins remains stopped before creating a missing mount
+  ansible.builtin.assert:
+    that:
+      - persistent_jenkins_premount_service_state.rc != 0
+    fail_msg: Jenkins became active while its retained filesystem was unmounted; refusing to mount over the running service.
+  when: persistent_jenkins_active_mount.rc == 1
+
+- name: Ensure the validated Jenkins mountpoint directory exists
+  ansible.builtin.file:
+    path: "{{ persistent_jenkins_mount_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ persistent_jenkins_mode }}"
+
+- name: Build the Jenkins fstab entry
+  ansible.builtin.set_fact:
+    persistent_jenkins_fstab_entry: >-
+      UUID={{ persistent_jenkins_uuid.stdout | trim }} {{ persistent_jenkins_mount_path }} {{ persistent_jenkins_filesystem }} {{ persistent_jenkins_mount_options }} 0 2
+
+- name: Read existing fstab entries for the Jenkins mountpoint
+  ansible.builtin.shell: >-
+    awk '!/^[[:space:]]*#/ && NF >= 2 && $2 == "{{ persistent_jenkins_mount_path }}" { print }' /etc/fstab
+  args:
+    executable: /bin/bash
+  register: persistent_jenkins_existing_fstab
+  changed_when: false
+
+- name: Refuse conflicting Jenkins fstab entries
+  ansible.builtin.assert:
+    that:
+      - persistent_jenkins_existing_fstab.stdout_lines | length <= 1
+      - >-
+        persistent_jenkins_existing_fstab.stdout_lines | length == 0 or
+        persistent_jenkins_existing_fstab.stdout_lines[0] == persistent_jenkins_fstab_entry
+    fail_msg: A conflicting fstab entry exists for the Jenkins mountpoint.
+
+- name: Persist the Jenkins filesystem mount by UUID
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: "^[^#]+\\s+{{ persistent_jenkins_mount_path | regex_escape }}\\s+"
+    line: "{{ persistent_jenkins_fstab_entry }}"
+    state: present
+
+- name: Mount the retained Jenkins filesystem
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/mount
+      - "{{ persistent_jenkins_mount_path }}"
+  when: persistent_jenkins_active_mount.rc == 1
+
+- name: Verify the mounted Jenkins filesystem
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/findmnt
+      - --noheadings
+      - --raw
+      - --evaluate
+      - --output
+      - SOURCE,UUID,FSTYPE
+      - --mountpoint
+      - "{{ persistent_jenkins_mount_path }}"
+  register: persistent_jenkins_verified_mount
+  changed_when: false
+
+- name: Assert the expected Jenkins filesystem is mounted by source and UUID
+  ansible.builtin.assert:
+    that:
+      - >-
+        persistent_jenkins_verified_mount.stdout.split() ==
+        [
+          persistent_jenkins_final_device.stdout,
+          (persistent_jenkins_uuid.stdout | trim),
+          persistent_jenkins_filesystem
+        ]
+    fail_msg: Jenkins storage mount verification failed.
+
+- name: Check whether the Jenkins package account exists
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/getent
+      - passwd
+      - jenkins
+  register: persistent_jenkins_user_lookup
+  changed_when: false
+  failed_when: persistent_jenkins_user_lookup.rc not in [0, 2]
+
+- name: Prepare the mounted Jenkins directory with temporary root ownership
+  ansible.builtin.file:
+    path: "{{ persistent_jenkins_mount_path }}"
+    state: directory
+    owner: "{{ persistent_jenkins_owner }}"
+    group: "{{ persistent_jenkins_group }}"
+    mode: "{{ persistent_jenkins_mode }}"
+  when: persistent_jenkins_user_lookup.rc == 2

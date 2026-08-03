@@ -17,3 +17,5 @@ root_volume_size = 30
 persistent_postgres_volume_id                = "vol-00000000000000000"
 persistent_postgres_availability_zone        = "eu-central-1a"
 persistent_postgres_attachment_device_name   = "/dev/sdf"
+persistent_jenkins_volume_id                  = "vol-00000000000000001"
+persistent_jenkins_attachment_device_name    = "/dev/sdg"

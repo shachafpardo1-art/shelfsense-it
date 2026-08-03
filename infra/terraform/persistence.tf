@@ -13,3 +13,19 @@ resource "aws_volume_attachment" "postgres_data" {
     }
   }
 }
+
+resource "aws_volume_attachment" "jenkins_data" {
+  device_name = var.persistent_jenkins_attachment_device_name
+  volume_id   = var.persistent_jenkins_volume_id
+  instance_id = aws_instance.shelfsense_server.id
+
+  lifecycle {
+    precondition {
+      condition = (
+        var.persistent_jenkins_volume_id != var.persistent_postgres_volume_id &&
+        var.persistent_jenkins_attachment_device_name != var.persistent_postgres_attachment_device_name
+      )
+      error_message = "Jenkins and PostgreSQL must use distinct EBS volume IDs and requested attachment device names."
+    }
+  }
+}

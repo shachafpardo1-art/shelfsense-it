@@ -547,3 +547,7 @@
     owner: "{{ persistent_postgres_owner }}"
     group: "{{ persistent_postgres_group }}"
     mode: "{{ persistent_postgres_mode }}"
+
+- name: Configure retained Jenkins controller storage when provided
+  ansible.builtin.include_tasks: jenkins.yml
+  when: persistent_jenkins_volume_id | length > 0
