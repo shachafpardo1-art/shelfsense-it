@@ -17,7 +17,7 @@
 - CI is limited to one trusted repository and one executor, with no public port 8080. Credentials remain in Jenkins Credentials rather than Git, and untrusted pull-request code must not receive deployment credentials.
 - Jenkins uses a 1 GiB JVM heap ceiling because it shares the roughly 8 GiB host with K3s and monitoring.
 - Jenkins controller state resides on its dedicated encrypted retained EBS volume. Git and Ansible keep pipelines and infrastructure reproducible, while the retained filesystem preserves controller configuration and build history across EC2 replacement. Persistent storage is not a backup.
-- Independent backups and isolated ephemeral build agents remain future improvements. Webhooks, Kubernetes RBAC, Jenkinsfile creation, credentials, reverse proxy, TLS, and deployment automation remain later milestones.
+- Independent backups and isolated ephemeral build agents remain future improvements. The Jenkinsfile and namespace-restricted deployment RBAC are repository-managed; webhook activation, credential upload, reverse proxy, TLS, and live pipeline evidence remain manual operational work.
 
 ## Stable Public Endpoint
 
