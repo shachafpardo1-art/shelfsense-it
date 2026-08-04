@@ -268,7 +268,7 @@ pipeline {
                   "${BACKEND_IMAGE}:${RELEASE_VERSION:-unknown}" \
                   "${BACKEND_IMAGE}:${COMMIT_TAG:-unknown}" \
                   "${FRONTEND_IMAGE}:${RELEASE_VERSION:-unknown}" \
-                  "${FRONTEND_IMAGE}:${COMMIT_TAG:-unknown}" >/dev/null 2>&1
+                  "${FRONTEND_IMAGE}:${COMMIT_TAG:-unknown}" >/dev/null 2>&1 || true
             '''
             deleteDir()
         }
