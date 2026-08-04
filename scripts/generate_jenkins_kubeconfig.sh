@@ -15,11 +15,22 @@ if [[ -e "$output_file" ]]; then
 fi
 
 cluster_name="$(kubectl config view --minify -o jsonpath='{.clusters[0].name}')"
-api_server="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
+detected_api_server="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
+api_server="${KUBERNETES_API_SERVER:-$detected_api_server}"
 ca_data="$(kubectl config view --raw --minify -o jsonpath='{.clusters[0].cluster.certificate-authority-data}')"
 
-if [[ -z "$cluster_name" || -z "$api_server" ]]; then
-  echo 'The current kubectl context does not contain a cluster name and API server.' >&2
+if [[ -z "$cluster_name" ]]; then
+  echo 'The current kubectl context does not contain a cluster name.' >&2
+  exit 1
+fi
+
+if [[ -z "$api_server" ]]; then
+  echo 'No Kubernetes API server was selected from the current context or KUBERNETES_API_SERVER.' >&2
+  exit 1
+fi
+
+if [[ "$api_server" != https://* ]]; then
+  echo 'The selected Kubernetes API server must start with https://.' >&2
   exit 1
 fi
 
@@ -70,5 +81,6 @@ unset token
 trap - EXIT
 
 printf 'Created restricted kubeconfig at %s (mode 0600).\n' "$output_file"
+printf 'Selected Kubernetes API server: %s\n' "$api_server"
 echo 'Upload it to Jenkins as a Secret file with ID: shelfsense-kubeconfig'
 echo 'After upload, delete the local file securely; never commit it.'
