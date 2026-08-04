@@ -200,11 +200,61 @@ pipeline {
                         fi
                         printf 'Kubernetes API server: %s\n' "$api_server"
 
+                        network_namespace="$(readlink /proc/self/ns/net 2>/dev/null || true)"
+                        printf 'Network namespace: %s\n' "${network_namespace:-unavailable}"
+
+                        if command -v ss > /dev/null 2>&1; then
+                            if ss -H -ltn 'sport = :6443' 2>/dev/null | grep -q .; then
+                                echo 'Port 6443 listener visible: yes'
+                            else
+                                echo 'Port 6443 listener visible: no'
+                            fi
+                        else
+                            echo 'Port 6443 listener visible: unavailable (ss not installed)'
+                        fi
+
+                        api_http_status="$(curl -sk --connect-timeout 3 --max-time 5 \
+                          --output /dev/null --write-out '%{http_code}' "${api_server%/}/version" || true)"
+                        printf 'Kubernetes API /version diagnostic HTTP status: %s\n' "${api_http_status:-000}"
+
+                        for proxy_name in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
+                            if proxy_value="$(printenv "$proxy_name")"; then
+                                sanitized_proxy="$(printf '%s' "$proxy_value" \
+                                  | tr '\r\n' '  ' \
+                                  | sed -E \
+                                      -e 's#(https?://)[^/@[:space:]]+@#\1[REDACTED]@#g' \
+                                      -e 's#[A-Za-z0-9+/_=.-]{32,}#[REDACTED]#g')"
+                                printf '%s=%s\n' "$proxy_name" "$sanitized_proxy"
+                            fi
+                        done
+
+                        kubectl_error_file="$(mktemp "${WORKSPACE}/.kubectl-preflight.XXXXXX")"
+                        chmod 600 "$kubectl_error_file"
+                        trap 'rm -f "$kubectl_error_file"' EXIT
+
                         attempt=1
                         max_attempts=9
-                        until kubectl --request-timeout=2s version > /dev/null 2>&1; do
+                        while true; do
+                            : > "$kubectl_error_file"
+                            if kubectl --request-timeout=5s version > /dev/null 2> "$kubectl_error_file"; then
+                                break
+                            fi
+
+                            printf 'kubectl error (attempt %s/%s):\n' "$attempt" "$max_attempts"
+                            if [ -s "$kubectl_error_file" ]; then
+                                sed -E \
+                                  -e 's#(https?://)[^/@[:space:]]+@#\1[REDACTED]@#g' \
+                                  -e 's#([Aa]uthorization:?[[:space:]]*)[^[:space:]].*#\1[REDACTED]#g' \
+                                  -e 's#([Bb]earer[[:space:]]+)[A-Za-z0-9._~+/-]+#\1[REDACTED]#g' \
+                                  -e 's#([Tt]oken[=:][[:space:]]*)[^[:space:]]+#\1[REDACTED]#g' \
+                                  -e 's#[A-Za-z0-9+/_=.-]{32,}#[REDACTED]#g' \
+                                  "$kubectl_error_file"
+                            else
+                                echo '(kubectl produced no stderr)'
+                            fi
+
                             if [ "$attempt" -ge "$max_attempts" ]; then
-                                echo 'Kubernetes preflight failed: API did not become ready within 60 seconds.' >&2
+                                echo 'Kubernetes preflight failed: API did not become ready within 90 seconds.' >&2
                                 exit 1
                             fi
                             printf 'Kubernetes API not ready (attempt %s/%s); retrying in 5 seconds...\n' \
@@ -212,6 +262,8 @@ pipeline {
                             attempt=$((attempt + 1))
                             sleep 5
                         done
+                        rm -f "$kubectl_error_file"
+                        trap - EXIT
                         printf 'Kubernetes API ready (attempt %s/%s).\n' "$attempt" "$max_attempts"
 
                         current_context="$(kubectl config current-context)"
