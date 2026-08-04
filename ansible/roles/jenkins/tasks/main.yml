@@ -20,10 +20,44 @@
 
 - name: Install Jenkins runtime prerequisites
   ansible.builtin.apt:
-    name: "{{ jenkins_runtime_packages + ['ca-certificates', 'python3-debian'] }}"
+    name: "{{ jenkins_runtime_packages + ['acl', 'ca-certificates', 'python3-debian'] }}"
     state: present
     update_cache: true
     cache_valid_time: 3600
+
+- name: Download official NodeSource repository signing key
+  ansible.builtin.get_url:
+    url: "{{ nodesource_apt_key_url }}"
+    dest: "{{ nodesource_apt_key_path }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Configure official NodeSource Node.js 22.x APT repository
+  ansible.builtin.deb822_repository:
+    name: nodesource-nodejs-22
+    types:
+      - deb
+    uris:
+      - "{{ nodesource_apt_repository_url }}"
+    suites:
+      - nodistro
+    components:
+      - main
+    signed_by: "{{ nodesource_apt_key_path }}"
+    state: present
+    enabled: true
+  register: nodesource_repository
+
+- name: Refresh APT cache after NodeSource repository changes
+  ansible.builtin.apt:
+    update_cache: true
+  when: nodesource_repository.changed
+
+- name: Install Node.js 22 with bundled npm and npx
+  ansible.builtin.apt:
+    name: "{{ nodesource_package_name }}"
+    state: present
 
 - name: Download Jenkins 2026 repository signing key
   ansible.builtin.get_url:
@@ -90,6 +124,47 @@
       - jenkins_account_check.stdout | trim | length > 0
       - jenkins_primary_group_check.stdout | trim | length > 0
     fail_msg: The Jenkins package did not create the required jenkins account and group.
+
+- name: Read Node.js version as the Jenkins service account
+  become: true
+  become_user: jenkins
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/env
+      - node
+      - --version
+  register: jenkins_node_version_check
+  changed_when: false
+
+- name: Read npm version as the Jenkins service account
+  become: true
+  become_user: jenkins
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/env
+      - npm
+      - --version
+  register: jenkins_npm_version_check
+  changed_when: false
+
+- name: Read npx version as the Jenkins service account
+  become: true
+  become_user: jenkins
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/env
+      - npx
+      - --version
+  register: jenkins_npx_version_check
+  changed_when: false
+
+- name: Assert Jenkins can use Node.js 22, npm, and npx
+  ansible.builtin.assert:
+    that:
+      - (jenkins_node_version_check.stdout | trim) is match('^v22\.[0-9]+\.[0-9]+$')
+      - (jenkins_npm_version_check.stdout | trim) is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+      - (jenkins_npx_version_check.stdout | trim) is match('^[0-9]+\.[0-9]+\.[0-9]+$')
+    fail_msg: The Jenkins service account requires Node.js 22 with npm and npx on its system PATH.
 
 - name: Build the expected Jenkins Nitro EBS by-id path
   ansible.builtin.set_fact:

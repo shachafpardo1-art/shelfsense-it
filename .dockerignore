@@ -1,0 +1,12 @@
+.git
+.gitignore
+.venv
+.ci-venv
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+frontend/node_modules
+frontend/dist
+frontend/*.tsbuildinfo
+kubernetes/ci/generated
+*.log

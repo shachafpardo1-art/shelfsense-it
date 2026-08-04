@@ -9,11 +9,13 @@ This directory contains the server-configuration layer for ShelfSense IT. The fl
 - `k3s`: installs K3s, waits for the Kubernetes API and node readiness, and prepares `kubectl` access for the `ubuntu` user.
 - `helm`: installs the Helm CLI so the existing Helm chart can be used later to deploy ShelfSense.
 - `docker`: installs Docker Engine and CI image-build tooling from Docker's official Ubuntu repository without replacing or reconfiguring K3s containerd.
-- `jenkins`: installs Jenkins LTS as a systemd service with Java 21, loopback-only access, Docker group membership, and a conservative 1 GiB JVM heap ceiling.
+- `jenkins`: installs Jenkins LTS as a systemd service with Java 21, Node.js 22 LTS with npm/npx, loopback-only access, Docker group membership, and a conservative 1 GiB JVM heap ceiling.
 
 K3s continues to use its own bundled `containerd` runtime. Docker Engine is installed separately for Jenkins CI image builds and does not replace or configure the K3s runtime. Jenkins runs as the non-root `jenkins` system user, while membership in the `docker` group grants effectively privileged access to the Docker daemon. This is an accepted trade-off for the trusted single-node CI environment.
 
 Jenkins listens only on `127.0.0.1:8080` and is initially accessed through an SSH tunnel. Port 8080 must not be exposed publicly. The role limits the Jenkins JVM heap to 1 GiB because Jenkins shares the roughly 8 GiB host with K3s and monitoring.
+
+The Jenkins role configures the official NodeSource `node_22.x` APT repository using its signing key in `/etc/apt/keyrings`, then installs the system-wide `nodejs` package. NodeSource bundles npm and npx with that package. The role runs `node --version`, `npm --version`, and `npx --version` through the `jenkins` account's system `PATH` and requires Node.js major version 22. It does not install or depend on nvm.
 
 The Jenkins setup wizard, initial administrator, plugins, credentials, jobs, webhook, RBAC, Jenkinsfile, reverse proxy, TLS, and deployment automation are later milestones. The role does not read or expose the initial administrator password and does not bypass setup security.
 

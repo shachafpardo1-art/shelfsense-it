@@ -183,3 +183,7 @@ The frontend image defaults to the same-origin API base `/api/v1`. Browser API c
 ## K3s monitoring
 
 The lightweight monitoring stack is installed as a separate `kube-prometheus-stack` Helm release in the `monitoring` namespace. Prometheus scrapes the backend `/metrics` endpoint internally through the `shelfsense-backend` ClusterIP Service; Traefik no longer exposes `/metrics` publicly. Grafana remains ClusterIP-only and is accessed with `kubectl port-forward`. Prometheus, Alertmanager, and Grafana storage is ephemeral. Installation and validation commands are in [`monitoring/README.md`](monitoring/README.md).
+
+## Jenkins CI/CD
+
+The root `Jenkinsfile` validates backend, frontend, and container builds for pull requests without exposing release credentials. A successful `main` build publishes shared semantic and immutable image tags, deploys the `shelfsense` Helm release with namespace-restricted Kubernetes access, verifies the rollout, performs local smoke tests, and then creates the release Git tag. Bootstrap, credentials, RBAC, webhook work, rollback behavior, and required evidence are documented in [`docs/jenkins-cicd.md`](docs/jenkins-cicd.md).
