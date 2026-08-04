@@ -99,25 +99,55 @@ pipeline {
                 branch 'main'
             }
             steps {
-                script {
-                    env.RELEASE_VERSION = sh(
-                        script: '''
-                            set -eu
-                            latest_tag="$(git tag --list 'v*' --sort=-v:refname | awk '/^v[0-9]+\\.[0-9]+\\.[0-9]+$/ { print; exit }')"
-                            if [ -z "$latest_tag" ]; then
-                                printf '%s' '1.0.0'
-                            else
-                                version="${latest_tag#v}"
-                                major="${version%%.*}"
-                                remainder="${version#*.}"
-                                minor="${remainder%%.*}"
-                                patch="${remainder##*.}"
-                                printf '%s.%s.%s' "$major" "$minor" "$((patch + 1))"
-                            fi
-                        ''',
-                        returnStdout: true
-                    ).trim()
-                    echo "Release version: ${env.RELEASE_VERSION}; immutable tag: ${env.COMMIT_TAG}"
+                withCredentials([gitUsernamePassword(
+                    credentialsId: 'github-credentials',
+                    gitToolName: 'Default'
+                )]) {
+                    script {
+                        env.RELEASE_VERSION = sh(
+                            script: '''
+                                set -eu
+                                git fetch --force --tags origin
+
+                                latest_tag="$(git tag --list 'v*' --sort=-v:refname | awk '/^v[0-9]+\\.[0-9]+\\.[0-9]+$/ { print; exit }')"
+                                if [ -z "$latest_tag" ]; then
+                                    release_version='1.0.0'
+                                else
+                                    version="${latest_tag#v}"
+                                    major="${version%%.*}"
+                                    remainder="${version#*.}"
+                                    minor="${remainder%%.*}"
+                                    patch="${remainder##*.}"
+                                    release_version="${major}.${minor}.$((patch + 1))"
+                                fi
+
+                                intended_tag="v${release_version}"
+                                if git show-ref --verify --quiet "refs/tags/${intended_tag}"; then
+                                    echo "Release calculation failed: local tag ${intended_tag} already exists." >&2
+                                    exit 1
+                                fi
+
+                                remote_tag_status=0
+                                git ls-remote --exit-code --tags origin "refs/tags/${intended_tag}" > /dev/null 2>&1 || remote_tag_status=$?
+                                case "$remote_tag_status" in
+                                    0)
+                                        echo "Release calculation failed: remote tag ${intended_tag} already exists." >&2
+                                        exit 1
+                                        ;;
+                                    2)
+                                        ;;
+                                    *)
+                                        echo "Release calculation failed: could not verify remote tag ${intended_tag}." >&2
+                                        exit 1
+                                        ;;
+                                esac
+
+                                printf '%s' "$release_version"
+                            ''',
+                            returnStdout: true
+                        ).trim()
+                        echo "Release version: ${env.RELEASE_VERSION}; immutable tag: ${env.COMMIT_TAG}"
+                    }
                 }
             }
         }
@@ -162,6 +192,47 @@ pipeline {
                         set -eu
                         set +x
                         export KUBECONFIG="$JENKINS_KUBECONFIG"
+
+                        api_server="$(kubectl config view --minify --output jsonpath='{.clusters[0].cluster.server}')"
+                        if [ -z "$api_server" ]; then
+                            echo 'Kubernetes preflight failed: kubeconfig has no API server URL.' >&2
+                            exit 1
+                        fi
+                        printf 'Kubernetes API server: %s\n' "$api_server"
+
+                        attempt=1
+                        max_attempts=9
+                        until kubectl --request-timeout=2s version > /dev/null 2>&1; do
+                            if [ "$attempt" -ge "$max_attempts" ]; then
+                                echo 'Kubernetes preflight failed: API did not become ready within 60 seconds.' >&2
+                                exit 1
+                            fi
+                            printf 'Kubernetes API not ready (attempt %s/%s); retrying in 5 seconds...\n' \
+                              "$attempt" "$max_attempts"
+                            attempt=$((attempt + 1))
+                            sleep 5
+                        done
+                        printf 'Kubernetes API ready (attempt %s/%s).\n' "$attempt" "$max_attempts"
+
+                        current_context="$(kubectl config current-context)"
+                        context_namespace="$(kubectl config view --minify --output jsonpath='{..namespace}')"
+                        if [ -z "$current_context" ] || [ "$context_namespace" != "$KUBE_NAMESPACE" ]; then
+                            echo "Kubernetes preflight failed: current context must target namespace ${KUBE_NAMESPACE}." >&2
+                            exit 1
+                        fi
+
+                        if ! kubectl --namespace "$KUBE_NAMESPACE" --request-timeout=5s get deployments > /dev/null; then
+                            echo "Kubernetes preflight failed: credential cannot get deployments in ${KUBE_NAMESPACE}." >&2
+                            exit 1
+                        fi
+
+                        can_update="$(kubectl auth can-i update deployments.apps --namespace "$KUBE_NAMESPACE")"
+                        if [ "$can_update" != 'yes' ]; then
+                            echo "Kubernetes preflight failed: credential cannot update deployments in ${KUBE_NAMESPACE}." >&2
+                            exit 1
+                        fi
+                        echo 'Kubernetes namespace and deployment permissions verified.'
+
                         password_file="$(mktemp "${WORKSPACE}/.postgres-password.XXXXXX")"
                         chmod 600 "$password_file"
                         trap 'rm -f "$password_file"' EXIT
