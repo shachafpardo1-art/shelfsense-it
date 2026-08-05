@@ -6,7 +6,7 @@ ShelfSense IT uses a simplified AWS architecture designed for a junior DevOps pr
 
 The goal is to demonstrate Infrastructure as Code, Configuration Management, CI/CD, Kubernetes, and Monitoring while keeping cloud costs low.
 
-The current validated baseline uses Terraform to provision AWS infrastructure and Ansible to configure a single Ubuntu EC2 instance for K3s.
+The current validated baseline uses Terraform to provision AWS infrastructure and Ansible to configure a single Ubuntu EC2 instance for K3s, Helm, retained storage, and Jenkins.
 
 Docker Compose remains a local development workflow only. AWS runtime validation is based on K3s with `containerd`, with application images stored in Docker Hub.
 
@@ -14,31 +14,32 @@ The compute/network runtime remains temporary. PostgreSQL data and Jenkins contr
 
 ---
 
-## Current Validated Baseline
+## Current validated baseline
 
 ```text
-                 Internet
-                     |
-             Internet Gateway
-                     |
-              Public Route Table
-                     |
-               Public Subnet
-                     |
-              Security Group
-                     |
-               Ubuntu EC2 Instance
-                     |
-       Retained EBS volume attachments
-              |               |
-  /srv/shelfsense/postgres  /var/lib/jenkins
-         (ext4, UUID)         (ext4, UUID)
-                     |
-          K3s v1.34.8+k3s1 (containerd)
-                     |
-               Helm v3.19.0
-                     |
-              kubeconfig access
+GitHub <--- scan requests and Git tag pushes --- Jenkins on EC2
+                                               |  (loopback only;
+                                               |   SSH tunnel access)
+                                               +------> Docker Hub
+                                               |          image push
+                                               v
+Internet --> AWS network --> EC2 host --> K3s v1.34.8+k3s1 single-node cluster
+                                             (Helm v3.19.0)
+                                  |          |
+                                  |          +--> Traefik --> frontend
+                                  |          |             --> backend
+                                  |          |                    |
+                                  |          |               PostgreSQL
+                                  |          |
+                                  |          +--> monitoring namespace
+                                  |               Prometheus, Grafana,
+                                  |               Alertmanager and exporters
+                                  |
+                +-----------------+-----------------+
+                |                                   |
+ retained PostgreSQL EBS                   retained Jenkins EBS
+ /srv/shelfsense/postgres                  /var/lib/jenkins
+ (ext4, UUID mount)                        (ext4, UUID mount)
 ```
 
 ### Terraform
@@ -66,12 +67,13 @@ Ansible configures the Ubuntu server after Terraform creates it. The validated r
 - kubeconfig setup for cluster access
 - safe Nitro EBS discovery, first-use ext4 creation, UUID-based fstab entry, and mount at `/srv/shelfsense/postgres`
 - safe Nitro EBS discovery, guarded first-use ext4 creation, UUID-based fstab entry, and mount at `/var/lib/jenkins` when a Jenkins volume ID is supplied
+- Jenkins installation, loopback binding, retained-mount verification, and required controller and pipeline runtime packages
 
-Jenkins storage is prepared as `root:root` because the package-created `jenkins` user does not exist during this milestone. The later Jenkins role must set `jenkins:jenkins` ownership after package installation and before the first service start. Jenkins must never start before the retained mount is verified.
+Jenkins storage is initially prepared as `root:root` because the package-created `jenkins` user does not yet exist at that point in the role order. The Jenkins role installs the package without starting it, verifies the retained mount, sets `jenkins:jenkins` ownership, and configures the service mount requirement before the first start. Jenkins must never start before the retained mount is verified.
 
 ### Kubernetes Runtime
 
-The validated Kubernetes runtime on AWS is K3s with `containerd`. Helm is installed and verified on the host. The final in-cluster ShelfSense deployment on AWS is still part of a later milestone.
+The validated Kubernetes runtime on AWS is K3s with `containerd`. ShelfSense is deployed to the `shelfsense` namespace through the repository Helm chart. Traefik routes public application HTTP traffic to the frontend and supported backend routes; PostgreSQL runs as a StatefulSet.
 
 The infrastructure-managed `kubernetes/infrastructure/postgres-pv.yaml` manifest defines the static PersistentVolume with reclaim policy `Retain`. The Helm chart owns the explicitly bound PersistentVolumeClaim and PostgreSQL StatefulSet backed by `/srv/shelfsense/postgres`. PostgreSQL does not use the default K3s local-path provisioner for the AWS persistence path. The chart pins `postgres:16.14-trixie` so the reviewed PostgreSQL 16 behavior and UID/GID 999 storage contract do not drift with the mutable `postgres:16` tag.
 
@@ -136,11 +138,11 @@ The existing cluster completed a transition Helm release that recorded `helm.sh/
 
 ### Image Registry
 
-Application container images are stored in Docker Hub for both local and future cluster-based deployment flows.
+Application container images are stored in Docker Hub. Jenkins publishes semantic release tags and immutable full-commit-SHA tags, then deploys the semantic release through Helm.
 
 ---
 
-## K3s Application Architecture
+## K3s application and CI/CD architecture
 
 The Helm chart now defines the K3s application routing layer:
 
@@ -148,7 +150,7 @@ The Helm chart now defines the K3s application routing layer:
 - Frontend and backend services exposed internally as `ClusterIP`
 - PostgreSQL as a StatefulSet
 
-The monitoring configuration is a separate Helm release in the `monitoring` namespace. Jenkins remains planned and should not be treated as already deployed in AWS.
+The monitoring configuration is a separate Helm release in the `monitoring` namespace. Jenkins is installed on the EC2 host, stores controller state on the retained EBS filesystem mounted at `/var/lib/jenkins`, binds to loopback, and is accessed through an SSH tunnel. Its Multibranch Pipeline validates pull requests and branches, while `main` releases publish images, deploy the application, verify it, and create the Git release tag.
 
 ```text
                  Internet
@@ -165,11 +167,18 @@ The monitoring configuration is a separate Helm release in the `monitoring` name
 
         Prometheus scrapes backend metrics internally
         Grafana is available only through port-forward
+
+   Jenkins on EC2 --push images--> Docker Hub
+          |
+          +--restricted kubeconfig/RBAC--> shelfsense namespace
+          +--scan repository / push release tag--> GitHub
 ```
 
 Traefik accepts HTTP requests on the EC2 public IP because the default Ingress rule does not require a host name. It sends `/api` and the operational endpoints `/health` and `/ready` to the backend ClusterIP Service; the catch-all `/` route goes to the frontend ClusterIP Service. The `/metrics` endpoint is not publicly routed. Prometheus reaches it internally through the backend ClusterIP Service and a ServiceMonitor.
 
-Prometheus, Grafana, Alertmanager, kube-state-metrics, and node-exporter are managed by a separate `kube-prometheus-stack` Helm release in the `monitoring` namespace. Grafana is ClusterIP-only and accessed with `kubectl port-forward`. Monitoring storage is ephemeral and does not use the PostgreSQL EBS volume. A configured `ingress.host` narrows public application routing to that DNS host. DNS provisioning and TLS termination are outside this milestone.
+Prometheus, Grafana, Alertmanager, kube-state-metrics, and node-exporter are managed by a separate `kube-prometheus-stack` Helm release in the `monitoring` namespace. Grafana is ClusterIP-only and accessed with `kubectl port-forward`. Monitoring storage is ephemeral and does not use either retained EBS volume. Alertmanager has no real external notification receiver. A configured `ingress.host` narrows public application routing to that DNS host. DNS provisioning and TLS termination are not implemented in the current scope.
+
+Jenkins uses a namespace-restricted kubeconfig and RBAC permissions for the `shelfsense` namespace. It cannot manage the cluster-scoped PostgreSQL PersistentVolume or monitoring resources. Jenkins itself is not publicly exposed, so GitHub webhook automation is intentionally disabled; repository scanning and manual Multibranch scans are the current trigger mechanism.
 
 ## Security Principles
 

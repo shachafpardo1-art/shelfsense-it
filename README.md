@@ -18,6 +18,12 @@ A modern IT inventory management system built with FastAPI and DevOps best pract
 - Prometheus
 - Grafana
 
+## Project status
+
+Terraform provisions the disposable AWS runtime and the separately managed retained EBS volumes. Ansible configures the EC2 host, storage mounts, swap, K3s, Helm, Jenkins, and the runtime packages required by Jenkins jobs. ShelfSense is deployed to the single-node K3s cluster through Helm. The internal monitoring stack and the Jenkins Multibranch CI/CD pipeline are operational.
+
+The current design deliberately remains a single-host capstone environment. It does not claim multi-node availability, automated backups, public TLS or DNS, or external Alertmanager notification delivery.
+
 ## Persistent AWS database storage
 
 The disposable AWS runtime and long-lived PostgreSQL data have separate lifecycle owners:
@@ -93,7 +99,7 @@ Install frontend dependencies:
 
 ```bash
 cd frontend
-npm install
+npm ci
 ```
 
 Start the frontend locally:
@@ -178,7 +184,7 @@ http://<EC2_PUBLIC_IP>/health      -> backend Service
 http://<EC2_PUBLIC_IP>/ready       -> backend Service
 ```
 
-The frontend image defaults to the same-origin API base `/api/v1`. Browser API calls therefore return through Traefik to the backend without a hard-coded hostname or cross-origin configuration. Set `ingress.host` when a DNS name becomes available, or set `ingress.enabled: false` when ingress is managed separately. TLS certificates, HTTPS configuration, and DNS provisioning are deliberately outside this milestone.
+The frontend image defaults to the same-origin API base `/api/v1`. Browser API calls therefore return through Traefik to the backend without a hard-coded hostname or cross-origin configuration. Set `ingress.host` when a DNS name becomes available, or set `ingress.enabled: false` when ingress is managed separately. TLS certificates, HTTPS configuration, and DNS provisioning are not implemented in the current scope.
 
 ## K3s monitoring
 
@@ -186,4 +192,10 @@ The lightweight monitoring stack is installed as a separate `kube-prometheus-sta
 
 ## Jenkins CI/CD
 
-The root `Jenkinsfile` validates backend, frontend, and container builds for pull requests without exposing release credentials. A successful `main` build publishes shared semantic and immutable image tags, deploys the `shelfsense` Helm release with namespace-restricted Kubernetes access, verifies the rollout, performs local smoke tests, and then creates the release Git tag. Bootstrap, credentials, RBAC, webhook work, rollback behavior, and required evidence are documented in [`docs/jenkins-cicd.md`](docs/jenkins-cicd.md).
+The root `Jenkinsfile` validates backend, frontend, and container builds for pull requests and branches without exposing release credentials. A successful `main` build publishes shared semantic and immutable image tags, deploys the `shelfsense` Helm release with namespace-restricted Kubernetes access, verifies the rollout, performs local smoke tests, and then creates the release Git tag. Jenkins is bound to loopback and accessed through an SSH tunnel. Public GitHub webhook delivery is intentionally not configured; Multibranch repository scanning and manual scans discover changes. Bootstrap, credentials, RBAC, rollback behavior, and validation evidence are documented in [`docs/jenkins-cicd.md`](docs/jenkins-cicd.md).
+
+## Release and versioning model
+
+Annotated Git tags in the `vMAJOR.MINOR.PATCH` series are the authoritative production release versions. For each successful `main` release, Jenkins publishes both backend and frontend images with the shared semantic version and with the full commit SHA as an immutable tag. Jenkins passes `RELEASE_VERSION` to Helm and overrides `backend.image.tag` and `frontend.image.tag`, so the deployed images correspond to the Git release even when chart defaults differ.
+
+`kubernetes/helm-chart/Chart.yaml` `version` identifies the Helm chart package and schema. Its `appVersion` and the default image tags in `values.yaml` are baseline metadata and fallback values. Component metadata in `app/config.py` and `frontend/package.json` is maintained for those components and does not dynamically follow every Jenkins release.

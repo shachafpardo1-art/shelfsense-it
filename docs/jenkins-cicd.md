@@ -54,19 +54,34 @@ Upload the generated file to Jenkins as **Secret file** with ID **`shelfsense-ku
 
 The Role is namespace-scoped. Helm needs discovery-style `get`, `list`, and `watch` over supported namespaced resource types because Helm compares stored release state with live objects; Kubernetes RBAC cannot restrict `create` by `resourceNames`. Write access is therefore limited by namespace and resource type. It does not include namespaces, PersistentVolumes, nodes, cluster roles, custom resource definitions, the monitoring namespace, ServiceMonitors, or PrometheusRules.
 
-## Jenkins job and GitHub webhook
+## Jenkins job and change discovery
 
 Create a Jenkins Multibranch Pipeline pointed at this repository, configure branch-source credentials as needed, and ensure `main` plus change requests are discovered. The GitHub App/PAT used for branch discovery can be separate from `github-credentials`; only the latter needs tag-push permission.
 
-Webhook setup remains manual: expose a TLS-protected Jenkins webhook endpoint (do not expose port 8080 directly), add the Jenkins GitHub webhook URL to the repository, select push and pull-request events, and verify delivery plus automatic branch indexing. Until that is configured, use manual scans/builds.
+Jenkins binds to loopback on the EC2 host and is accessed through an SSH tunnel. It is intentionally not exposed publicly, so GitHub webhook delivery is not configured. Multibranch repository scanning and manual scans currently discover branches and pull requests.
 
-## Evidence still required
+A future improvement is to place a narrowly exposed, TLS-protected reverse proxy in front of the required webhook endpoint and then configure and verify a GitHub webhook. Jenkins port 8080 must not be exposed directly.
 
-Capture evidence without exposing secrets:
+## Release and versioning
 
-- successful PR validation showing that release stages were skipped;
-- successful `main` run through image push, atomic Helm deployment, smoke tests, and Git tag;
-- Docker Hub semantic and immutable image tags for both repositories;
-- Kubernetes rollout state and Helm release history;
-- RBAC `can-i` checks showing allowed namespaced access and denied PersistentVolume access;
-- successful GitHub webhook delivery.
+The annotated `vMAJOR.MINOR.PATCH` Git tag created after a successful deployment is the authoritative production release version. Jenkins publishes both application images with that semantic version and with the full commit SHA as an immutable tag. During deployment, `RELEASE_VERSION` overrides `backend.image.tag` and `frontend.image.tag` in Helm.
+
+The Helm `Chart.yaml` `version` describes the chart package and schema. `appVersion`, default image tags in `values.yaml`, and component metadata in `app/config.py` and `frontend/package.json` are baseline or component metadata; they are not expected to change automatically for every Jenkins release.
+
+## Failure containment
+
+A temporary Docker Hub HTTP 502 has been observed to fail the image-push stage. Deployment and Git tagging remain skipped in that case. Because the Git release tag has not been created, rerunning the same `main` commit safely completes the same intended release once Docker Hub recovers.
+
+## Validated evidence and status
+
+Successful evidence has been captured without exposing secrets for:
+
+- pull-request and branch validation with release stages skipped;
+- a complete `main` CI/CD run;
+- semantic and immutable image publication for both repositories;
+- atomic Helm deployment;
+- Deployment and StatefulSet rollout checks plus backend/frontend smoke checks;
+- annotated Git release tag creation in the `v1.0.x` series; and
+- RBAC behavior allowing the required namespace operations while denying cluster-scoped PersistentVolume access.
+
+No successful webhook-delivery evidence is claimed because public webhook exposure is intentionally not configured.
