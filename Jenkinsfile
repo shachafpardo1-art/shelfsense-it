@@ -41,36 +41,6 @@ pipeline {
             }
         }
 
-        stage('Kubernetes reachability before Docker') {
-            steps {
-                sh '''#!/bin/sh
-                    set +e
-                    set +x
-
-                    printf 'Process: pid=%s ppid=%s\n' "$$" "$PPID"
-                    printf 'Identity: '
-                    id || true
-                    echo 'Cgroup:'
-                    cat /proc/self/cgroup || true
-                    printf 'Network namespace: '
-                    readlink /proc/self/ns/net || true
-                    printf 'Mount namespace: '
-                    readlink /proc/self/ns/mnt || true
-                    for executable in sh curl kubectl; do
-                        printf 'Executable %s: ' "$executable"
-                        command -v "$executable" || true
-                    done
-                    echo 'Route to 10.0.1.219:'
-                    ip route get 10.0.1.219 || true
-                    curl --insecure --silent \
-                      --connect-timeout 5 --max-time 8 \
-                      --output /dev/null \
-                      --write-out 'Kubernetes reachability before Docker: HTTP status=%{http_code} remote IP=%{remote_ip} curl error=%{errormsg}\n' \
-                      https://10.0.1.219:6443/version || true
-                '''
-            }
-        }
-
         stage('Backend dependencies') {
             steps {
                 sh '''
@@ -209,21 +179,6 @@ pipeline {
             }
         }
 
-        stage('Kubernetes reachability after Docker') {
-            when {
-                branch 'main'
-            }
-            steps {
-                sh '''
-                    curl --insecure --silent \
-                      --connect-timeout 5 --max-time 8 \
-                      --output /dev/null \
-                      --write-out 'Kubernetes reachability after Docker: HTTP status=%{http_code} remote IP=%{remote_ip} curl error=%{errormsg}\n' \
-                      https://10.0.1.219:6443/version || true
-                '''
-            }
-        }
-
         stage('Deploy with Helm') {
             when {
                 branch 'main'
@@ -237,41 +192,6 @@ pipeline {
                         set -eu
                         set +x
                         export KUBECONFIG="$JENKINS_KUBECONFIG"
-
-                        api_server="$(kubectl config view --minify --output jsonpath='{.clusters[0].cluster.server}')"
-                        if [ -z "$api_server" ]; then
-                            echo 'Kubernetes preflight failed: kubeconfig has no API server URL.' >&2
-                            exit 1
-                        fi
-                        printf 'Kubernetes API server: %s\n' "$api_server"
-
-                        network_namespace="$(readlink /proc/self/ns/net 2>/dev/null || true)"
-                        printf 'Network namespace: %s\n' "${network_namespace:-unavailable}"
-
-                        if command -v ss > /dev/null 2>&1; then
-                            if ss -H -ltn 'sport = :6443' 2>/dev/null | grep -q .; then
-                                echo 'Port 6443 listener visible: yes'
-                            else
-                                echo 'Port 6443 listener visible: no'
-                            fi
-                        else
-                            echo 'Port 6443 listener visible: unavailable (ss not installed)'
-                        fi
-
-                        api_http_status="$(curl -sk --connect-timeout 3 --max-time 5 \
-                          --output /dev/null --write-out '%{http_code}' "${api_server%/}/version" || true)"
-                        printf 'Kubernetes API /version diagnostic HTTP status: %s\n' "${api_http_status:-000}"
-
-                        for proxy_name in HTTP_PROXY HTTPS_PROXY NO_PROXY http_proxy https_proxy no_proxy; do
-                            if proxy_value="$(printenv "$proxy_name")"; then
-                                sanitized_proxy="$(printf '%s' "$proxy_value" \
-                                  | tr '\r\n' '  ' \
-                                  | sed -E \
-                                      -e 's#(https?://)[^/@[:space:]]+@#\1[REDACTED]@#g' \
-                                      -e 's#[A-Za-z0-9+/_=.-]{32,}#[REDACTED]#g')"
-                                printf '%s=%s\n' "$proxy_name" "$sanitized_proxy"
-                            fi
-                        done
 
                         kubectl_error_file="$(mktemp "${WORKSPACE}/.kubectl-preflight.XXXXXX")"
                         chmod 600 "$kubectl_error_file"
