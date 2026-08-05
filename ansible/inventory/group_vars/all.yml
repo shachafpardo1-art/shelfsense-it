@@ -30,6 +30,7 @@ jenkins_runtime_packages:
   - fontconfig
   - iproute2
   - openjdk-21-jre
+  - python3-venv
 jenkins_package_name: jenkins
 jenkins_bind_address: 127.0.0.1
 jenkins_port: 8080
