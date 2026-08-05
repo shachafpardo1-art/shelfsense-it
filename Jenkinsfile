@@ -41,6 +41,18 @@ pipeline {
             }
         }
 
+        stage('Kubernetes reachability before Docker') {
+            steps {
+                sh '''
+                    curl --insecure --silent \
+                      --connect-timeout 5 --max-time 8 \
+                      --output /dev/null \
+                      --write-out 'Kubernetes reachability before Docker: HTTP status=%{http_code} remote IP=%{remote_ip} curl error=%{errormsg}\n' \
+                      https://10.0.1.219:6443/version || true
+                '''
+            }
+        }
+
         stage('Backend dependencies') {
             steps {
                 sh '''
@@ -176,6 +188,21 @@ pipeline {
                         docker push "${FRONTEND_IMAGE}:${COMMIT_TAG}"
                     '''
                 }
+            }
+        }
+
+        stage('Kubernetes reachability after Docker') {
+            when {
+                branch 'main'
+            }
+            steps {
+                sh '''
+                    curl --insecure --silent \
+                      --connect-timeout 5 --max-time 8 \
+                      --output /dev/null \
+                      --write-out 'Kubernetes reachability after Docker: HTTP status=%{http_code} remote IP=%{remote_ip} curl error=%{errormsg}\n' \
+                      https://10.0.1.219:6443/version || true
+                '''
             }
         }
 
