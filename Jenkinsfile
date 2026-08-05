@@ -43,7 +43,25 @@ pipeline {
 
         stage('Kubernetes reachability before Docker') {
             steps {
-                sh '''
+                sh '''#!/bin/sh
+                    set +e
+                    set +x
+
+                    printf 'Process: pid=%s ppid=%s\n' "$$" "$PPID"
+                    printf 'Identity: '
+                    id || true
+                    echo 'Cgroup:'
+                    cat /proc/self/cgroup || true
+                    printf 'Network namespace: '
+                    readlink /proc/self/ns/net || true
+                    printf 'Mount namespace: '
+                    readlink /proc/self/ns/mnt || true
+                    for executable in sh curl kubectl; do
+                        printf 'Executable %s: ' "$executable"
+                        command -v "$executable" || true
+                    done
+                    echo 'Route to 10.0.1.219:'
+                    ip route get 10.0.1.219 || true
                     curl --insecure --silent \
                       --connect-timeout 5 --max-time 8 \
                       --output /dev/null \
