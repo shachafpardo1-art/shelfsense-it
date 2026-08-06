@@ -24,6 +24,38 @@ Terraform provisions the disposable AWS runtime and the separately managed retai
 
 The current design deliberately remains a single-host capstone environment. It does not claim multi-node availability, automated backups, public TLS or DNS, or external Alertmanager notification delivery.
 
+## Architecture overview
+
+The React and TypeScript frontend sends inventory requests to the FastAPI backend, which uses SQLAlchemy and Alembic with PostgreSQL. Nginx serves the production frontend. The backend provides health and database-aware readiness endpoints, Prometheus metrics, and request-correlated logging.
+
+Docker Compose is the local development runtime. In AWS, Terraform provisions the disposable network and EC2 runtime and separately manages retained encrypted PostgreSQL and Jenkins EBS volumes. Ansible configures the Ubuntu host, and Helm deploys ShelfSense to the single-node K3s cluster. Traefik routes application traffic, while `kube-prometheus-stack` monitors the application from the separate `monitoring` namespace.
+
+Jenkins runs on the EC2 host and uses a Multibranch Pipeline. Validation builds do not deploy. Successful `main` builds publish images, deploy through Helm with restricted Kubernetes RBAC, verify the rollout and application, and create the release Git tag.
+
+## Local quick start
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+After the services become ready, open the frontend at `http://127.0.0.1:3000` and the backend API documentation at `http://127.0.0.1:8000/docs`. The Compose `migrate` service applies Alembic migrations and seeds the sample inventory before the backend starts.
+
+## Repository structure
+
+Application code, infrastructure, configuration management, deployment definitions, monitoring, and CI/CD are maintained in this repository. See the [repository guide](docs/repository-guide.md) for a path-by-path map and the connections between major components.
+
+## Documentation index
+
+- [AWS architecture and storage lifecycle](docs/aws-architecture.md)
+- [Jenkins CI/CD](docs/jenkins-cicd.md)
+- [Project decisions](docs/project-decisions.md)
+- [Terraform validation](docs/terraform-validation.md)
+- [Repository guide](docs/repository-guide.md)
+- [Project retrospective](docs/project-retrospective.md)
+- [Evidence index](docs/evidence.md)
+- [Monitoring installation and validation](monitoring/README.md)
+
 ## Persistent AWS database storage
 
 The disposable AWS runtime and long-lived PostgreSQL data have separate lifecycle owners:
@@ -199,3 +231,12 @@ The root `Jenkinsfile` validates backend, frontend, and container builds for pul
 Annotated Git tags in the `vMAJOR.MINOR.PATCH` series are the authoritative production release versions. For each successful `main` release, Jenkins publishes both backend and frontend images with the shared semantic version and with the full commit SHA as an immutable tag. Jenkins passes `RELEASE_VERSION` to Helm and overrides `backend.image.tag` and `frontend.image.tag`, so the deployed images correspond to the Git release even when chart defaults differ.
 
 `kubernetes/helm-chart/Chart.yaml` `version` identifies the Helm chart package and schema. Its `appVersion` and the default image tags in `values.yaml` are baseline metadata and fallback values. Component metadata in `app/config.py` and `frontend/package.json` is maintained for those components and does not dynamically follow every Jenkins release.
+
+## Limitations
+
+- The AWS runtime uses one EC2 instance and a single-node K3s cluster; it is not highly available.
+- Retained EBS volumes provide persistence across runtime replacement but are not backups.
+- TLS and DNS are not configured for application access.
+- Jenkins remains loopback-only, so public GitHub webhook delivery is not configured.
+- Monitoring storage is ephemeral, and Alertmanager has no external notification receiver.
+- PostgreSQL uses node-local static `hostPath` storage rather than CSI-backed dynamic storage.
